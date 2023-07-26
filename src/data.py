@@ -92,21 +92,24 @@ class GenericWFDataset(data.Dataset):
         # pre-apply transformations 
         self.tmp_data = None
         if on_load_transforms:
-            self.tmp_dir = f'{tmp_directory}/tmp{random.randint(0, 1000)}'
-            if not os.path.exists(self.tmp_dir):
-                try:
-                    os.makedirs(self.tmp_dir)
-                except:
-                    pass
-            self.tmp_data = dict()
+            if tmp_directory is not None:
+                self.tmp_dir = f'{tmp_directory}/tmp{random.randint(0, 1000)}'
+                if not os.path.exists(self.tmp_dir):
+                    try:
+                        os.makedirs(self.tmp_dir)
+                    except:
+                        pass
+                self.tmp_data = dict()
             for ID in tqdm(self.ids, desc="Processing...", dynamic_ncols=True):
                 x = self.dataset[ID]
                 x = on_load_transforms(x)
                 # store transforms to disk 
-                filename = f'{self.tmp_dir}/{ID}.pt'
-                self.tmp_data[ID] = filename
-                torch.save(x, filename)
-            del self.dataset
+                if tmp_directory is not None:
+                    filename = f'{self.tmp_dir}/{ID}.pt'
+                    self.tmp_data[ID] = filename
+                    torch.save(x, filename)
+                else:
+                    self.dataset[ID] = X
  
     def __len__(self):
         return len(self.ids)

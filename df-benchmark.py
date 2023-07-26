@@ -72,7 +72,7 @@ def parse_args():
                         default = False,
                         help = 'Perform evaluation only.')
     parser.add_argument('--lr', 
-                        default = 1e-3, 
+                        default = 1.5e-3, 
                         type = float,
                         help = "Set optimizer learning rate.")
     parser.add_argument('--warmup', 
@@ -91,6 +91,10 @@ def parse_args():
                         default = 1,
                         type = int,
                         help = "Set the number of same-sample defended instances to use for defended datasets.")
+    parser.add_argument('--use_tmp', 
+                        action = 'store_true',
+                        default=False,
+                        help = "Store data post transformation to disk to save memory.")
     return parser.parse_args()
 
 
@@ -234,7 +238,7 @@ if __name__ == "__main__":
                                                  te_augments = te_augments,
                                                  include_unm = include_unm,
                                                  multisample_count = args.multisamples,
-                                                 tmp_directory = './tmp',
+                                                 tmp_directory = './tmp' args.use_tmp else None,
                                                 )
     unm_class = classes-1 if include_unm else -1
 
