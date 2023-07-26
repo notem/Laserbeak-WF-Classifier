@@ -283,7 +283,7 @@ class DFNet(nn.Module):
             #nn.Softmax(dim=1) # dim = 1, don't softmax batch
         )
 
-        self.pos_embedding = PosEmbedding(dim=self.filter_nums[0], length=self.stage_sizes[0])
+        #self.pos_embedding = PosEmbedding(dim=self.filter_nums[0], length=self.stage_sizes[0])
 
     def __stage_size(self, input_size):
         fmap_size = [input_size]
