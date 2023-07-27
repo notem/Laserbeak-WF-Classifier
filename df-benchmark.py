@@ -149,7 +149,8 @@ if __name__ == "__main__":
     if resumed:
         model_config = resumed['config']
     elif args.config:
-        model_config = json.load(config)
+        with open(args.config, 'r') as fi:
+            model_config = json.load(fi)
     else:
         model_config = {
                 'input_size': 12000,
@@ -186,23 +187,17 @@ if __name__ == "__main__":
                 'feature_list': [ 
                                     #'dirs', 
                                     #'cumul', 
-                                    'time_dirs', 
                                     #'times', 
+                                    #'iats', 
+                                    'time_dirs', 
                                     'times_norm', 
                                     'cumul_norm', 
-                                    #'iats', 
-                                    'iat_dirs', 'inv_iat_log_dirs', 
-                                    'running_rates', #'running_rates_diff',
+                                    'iat_dirs', 
+                                    'inv_iat_log_dirs', 
+                                    'running_rates', 
+                                    #'running_rates_diff',
                         ]
             }
-        #model_config = {
-        #        #'input_size': 12000,
-        #        'input_size': 10000,
-
-        #        'feature_list': [ 
-        #                            'time_dirs', 
-        #                ]
-        #    }
 
     print("==> Model configuration:")
     print(json.dumps(model_config, indent=4))
@@ -228,7 +223,6 @@ if __name__ == "__main__":
                     ]
     te_augments = [
                     ]
-
 
     trainloader, testloader, classes = load_data(dataset, 
                                                  mini_batch_size = mini_batch_size,
@@ -268,7 +262,6 @@ if __name__ == "__main__":
     scheduler = transformers.get_cosine_schedule_with_warmup(optimizer,
                                                     num_warmup_steps = len(trainloader) * warmup_period // accum,
                                                     num_training_steps = len(trainloader) * epochs // accum,
-                                                    #num_cycles = 0.75,
                                                     num_cycles = 0.5,
                                                     last_epoch = ((last_epoch+1) * len(trainloader) // accum) - 1,
                                                 )

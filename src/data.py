@@ -487,7 +487,7 @@ def load_data(dataset,
     elif dataset == 'be-interspace':
         data_obj = partial(BigEnough, 
                             root, 
-                            defense_mode = 'front',
+                            defense_mode = 'interspace',
                             **kwargs,
                 )
 
