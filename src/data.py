@@ -109,7 +109,7 @@ class GenericWFDataset(data.Dataset):
                     self.tmp_data[ID] = filename
                     torch.save(x, filename)
                 else:
-                    self.dataset[ID] = X
+                    self.dataset[ID] = x
  
     def __len__(self):
         return len(self.ids)

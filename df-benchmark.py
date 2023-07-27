@@ -152,8 +152,8 @@ if __name__ == "__main__":
         model_config = json.load(config)
     else:
         model_config = {
-                #'input_size': 12000,
-                'input_size': 10000,
+                'input_size': 12000,
+                #'input_size': 10000,
                 #'input_size': 7000,
 
                 'filter_grow_factor': 1.3,  # filter count scaling factor between stages
@@ -174,14 +174,14 @@ if __name__ == "__main__":
 
                 'mlp_hidden_dim': 1024,
 
-                #'trans_depths': 2,  # number of transformer layers used in each stage
-                #'mhsa_kwargs': {            # transformer layer definitions
-                #                'head_dim': 10,
-                #                'use_conv_proj': True, 'kernel_size': 7, 'stride': 4,
-                #                'feedforward_style': 'mlp',
-                #                'feedforward_ratio': 3,
-                #                'feedforward_drop': 0.,
-                #               },
+                'trans_depths': 2,  # number of transformer layers used in each stage
+                'mhsa_kwargs': {            # transformer layer definitions
+                                'head_dim': 10,
+                                'use_conv_proj': True, 'kernel_size': 7, 'stride': 4,
+                                'feedforward_style': 'mlp',
+                                'feedforward_ratio': 3,
+                                'feedforward_drop': 0.,
+                               },
 
                 'feature_list': [ 
                                     #'dirs', 
@@ -238,7 +238,7 @@ if __name__ == "__main__":
                                                  te_augments = te_augments,
                                                  include_unm = include_unm,
                                                  multisample_count = args.multisamples,
-                                                 tmp_directory = './tmp' args.use_tmp else None,
+                                                 tmp_directory = './tmp' if args.use_tmp else None,
                                                 )
     unm_class = classes-1 if include_unm else -1
 
