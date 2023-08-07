@@ -340,17 +340,19 @@ def load_mon(data_dir, mon_raw_data_name, sample_idx,
 
         print(f'{i}', end='\r', flush=True)
         sample_idx = sample_idx[sample_idx < len(raw_data[key])]
+        #samples = np.array(raw_data[key], dtype=object)[sample_idx].tolist()
         samples = np.array(raw_data[key], dtype=object)[sample_idx].tolist()
+        #samples = raw_data[key]
 
         for multisample in samples:
             i = 0
             while i < len(multisample) and i < multisample_count:
                 sample = multisample[i]
+                i += 1
                 #sample = np.array([np.abs(sample), np.ones(len(sample))*512, np.sign(sample)]).T
                 if len(sample) < min_length: continue
                 all_X.append(sample)
                 all_y.append(key)
-                i += 1
 
     del raw_data
 
@@ -387,9 +389,9 @@ def load_unm(data_dir, raw_data_name, sample_idx,
         while j < len(multisample) and j < multisample_count:
             sample = multisample[j]
             #sample = np.array([np.abs(sample), np.ones(len(sample))*512, np.sign(sample)]).T
+            j += 1
             if len(sample) < min_length: continue
             all_X_umn.append(sample)
-            j += 1
 
             if max_samples > 0 and len(all_X_umn) == max_samples:
                 break
@@ -450,7 +452,8 @@ def collate_and_pad(batch, return_sample_sizes=True):
 
 
 
-DATASET_CHOICES = ['be', 'be-front', 'be-interspace', 'amazon', 'amazon-front', 'webmd', 'webmd-front']
+DATASET_CHOICES = ['be', 'be-front', 'be-interspace', 'be-regulator', 'be-ts2', 'be-ts5', 
+                   'amazon', 'amazon-front', 'webmd', 'webmd-front']
 
 
 def load_data(dataset, 
@@ -488,6 +491,27 @@ def load_data(dataset,
         data_obj = partial(BigEnough, 
                             root, 
                             defense_mode = 'interspace',
+                            **kwargs,
+                )
+
+    elif dataset == 'be-regulator':
+        data_obj = partial(BigEnough, 
+                            root, 
+                            defense_mode = 'regulator',
+                            **kwargs,
+                )
+
+    elif dataset == 'be-ts2':
+        data_obj = partial(BigEnough, 
+                            root, 
+                            defense_mode = 'ts2',
+                            **kwargs,
+                )
+
+    elif dataset == 'be-ts5':
+        data_obj = partial(BigEnough, 
+                            root, 
+                            defense_mode = 'ts5',
                             **kwargs,
                 )
 
