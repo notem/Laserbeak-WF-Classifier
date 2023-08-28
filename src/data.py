@@ -63,7 +63,6 @@ class GenericWFDataset(data.Dataset):
                     unm_sample_idx = tr_unm_idx,
                     multisample_count = multisample_count,
                     min_length = min_length, 
-                    oversample = True,
                     class_divisor = class_divisor,
                     class_selector = class_selector,
                     **kwargs)
@@ -77,7 +76,6 @@ class GenericWFDataset(data.Dataset):
                     unm_sample_idx = te_unm_idx,
                     multisample_count = 1,
                     min_length = min_length, 
-                    oversample = False,
                     class_divisor = class_divisor,
                     class_selector = class_selector,
                     **kwargs)
@@ -104,7 +102,7 @@ class GenericWFDataset(data.Dataset):
                 x = self.dataset[ID]
                 x = on_load_transforms(x)
                 # store transforms to disk 
-                if tmp_directory is not None:
+                if self.tmp_data is not None:
                     filename = f'{self.tmp_dir}/{ID}.pt'
                     self.tmp_data[ID] = filename
                     torch.save(x, filename)
@@ -124,8 +122,11 @@ class GenericWFDataset(data.Dataset):
         return X, self.labels[ID]
 
     def __del__(self):
-        if self.tmp_data is not None:
-            shutil.rmtree(self.tmp_dir)
+        try:
+            if self.tmp_data is not None:
+                shutil.rmtree(self.tmp_dir)
+        except:
+            pass
 
 # # # #
 #
@@ -249,7 +250,6 @@ def load_full_dataset(
         unm_suffix = "",
         multisample_count = 1,
         min_length = MIN_LENGTH_DEFAULT,
-        oversample = True,              # only use during training!
         class_divisor = 1,
         class_selector = None,
         **kwargs
@@ -277,28 +277,25 @@ def load_full_dataset(
     # # # # # #
     # Unmonitored Websites
     # # # # # #
-    all_X_umn = None
+    all_X_unm = None
     if include_unm:
         class_names += ['unm']
         unm_label = np.amax(all_y)+1 if (all_y is not None) else 0
                 
-        max_samples = -1
-        if (all_X is not None) and oversample:
-            max_samples = len(all_y)
-        all_X_umn = load_unm(data_dir, unm_raw_data_name, unm_sample_idx, 
+        all_X_unm = load_unm(data_dir, unm_raw_data_name, unm_sample_idx, 
                                 unm_label = unm_label,
                                 min_length = min_length, 
-                                max_samples = max_samples, 
                                 unm_suffix = unm_suffix,
                                 multisample_count = multisample_count,
                             )
-        all_y_umn = np.ones(len(all_X_umn)) * unm_label
+        all_y_unm = np.ones(len(all_X_unm)) * unm_label
+        print(len(all_y), len(all_y_unm), unm_label)
         if (all_X is not None):
-            all_X = np.concatenate((all_X, all_X_umn))
-            all_y = np.concatenate((all_y, all_y_umn))
+            all_X = np.concatenate((all_X, all_X_unm))
+            all_y = np.concatenate((all_y, all_y_unm))
         else:
-            all_X = all_X_umn
-            all_y = all_y_umn
+            all_X = all_X_unm
+            all_y = all_y_unm
 
         # add unmon label to class selector to avoid filtering unm samples
         if class_selector is not None:
@@ -347,7 +344,7 @@ def load_mon(data_dir, mon_raw_data_name, sample_idx,
         for multisample in samples:
             i = 0
             while i < len(multisample) and i < multisample_count:
-                sample = multisample[i]
+                sample = np.around(multisample[i], decimals=2)
                 i += 1
                 #sample = np.array([np.abs(sample), np.ones(len(sample))*512, np.sign(sample)]).T
                 if len(sample) < min_length: continue
@@ -387,7 +384,7 @@ def load_unm(data_dir, raw_data_name, sample_idx,
 
         j = 0
         while j < len(multisample) and j < multisample_count:
-            sample = multisample[j]
+            sample = np.around(multisample[j], decimals=2)
             #sample = np.array([np.abs(sample), np.ones(len(sample))*512, np.sign(sample)]).T
             j += 1
             if len(sample) < min_length: continue
@@ -453,7 +450,8 @@ def collate_and_pad(batch, return_sample_sizes=True):
 
 
 DATASET_CHOICES = ['be', 'be-front', 'be-interspace', 'be-regulator', 'be-ts2', 'be-ts5', 
-                   'amazon', 'amazon-front', 'webmd', 'webmd-front']
+                   'amazon', 'amazon-300k', 'amazon-front', 'amazon-front-300k', 'amazon-interspace', 'amazon-interspace-300k',
+                   'webmd', 'webmd-300k', 'webmd-front', 'webmd-front-300k', 'webmd-interspace', 'webmd-interspace-300k']
 
 
 def load_data(dataset, 
@@ -518,6 +516,15 @@ def load_data(dataset,
     elif dataset == 'amazon':
         data_obj = partial(AmazonSingleSite, 
                             root, 
+                            defense_mode = 'undef',
+                            **kwargs,
+                )
+
+    elif dataset == 'amazon-300k':
+        data_obj = partial(AmazonSingleSite, 
+                            root, 
+                            defense_mode = 'undef',
+                            unm_te_count = 294000,
                             **kwargs,
                 )
 
@@ -528,18 +535,66 @@ def load_data(dataset,
                             **kwargs,
                 )
 
-    elif dataset == 'webmd':
+    elif dataset == 'amazon-front-300k':
         data_obj = partial(AmazonSingleSite, 
                             root, 
+                            defense_mode = 'front',
+                            unm_te_count = 294000,
+                            **kwargs,
+                )
+
+    elif dataset == 'amazon-interspace':
+        data_obj = partial(AmazonSingleSite, 
+                            root, 
+                            defense_mode = 'interspace',
+                            **kwargs,
+                )
+
+    elif dataset == 'amazon-interspace-300k':
+        data_obj = partial(AmazonSingleSite, 
+                            root, 
+                            defense_mode = 'interspace',
+                            unm_te_count = 294000,
+                            **kwargs,
+                )
+
+    elif dataset == 'webmd':
+        data_obj = partial(WebMDSingleSite, 
+                            root, 
+                            defense_mode = 'undef',
                             **kwargs,
                 )
 
     elif dataset == 'webmd-front':
-        data_obj = partial(AmazonSingleSite, 
+        data_obj = partial(WebMDSingleSite, 
                             root, 
                             defense_mode = 'front',
                             **kwargs,
                 )
+
+    elif dataset == 'webmd-front-300k':
+        data_obj = partial(WebMDSingleSite, 
+                            root, 
+                            defense_mode = 'front',
+                            unm_te_count = 294000,
+                            **kwargs,
+                )
+
+    elif dataset == 'webmd-interspace':
+        data_obj = partial(WebMDSingleSite, 
+                            root, 
+                            defense_mode = 'interspace',
+                            **kwargs,
+                )
+
+    elif dataset == 'webmd-interspace-300k':
+        data_obj = partial(WebMDSingleSite, 
+                            root, 
+                            defense_mode = 'interspace',
+                            unm_te_count = 294000,
+                            **kwargs,
+                )
+
 
     trainset = data_obj(train=True, **tr_transforms) 
     testset = data_obj(train=False, **te_transforms) 

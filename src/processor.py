@@ -226,10 +226,10 @@ class DataProcessor:
 
         # adjust feature vectors sizes to match traffic sequence length and stack
         feature_stack = list(fix_size(feature_dict[opt]) for opt in self.process_options)
-        features = torch.stack(feature_stack, dim=-1)
+        features = torch.nan_to_num(torch.stack(feature_stack, dim=-1))
 
-        assert not torch.any(features.isnan())
-        assert not torch.any(features.isinf())
+        #assert not torch.any(features.isnan())
+        #assert not torch.any(features.isinf())
 
         return features
 

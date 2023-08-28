@@ -177,7 +177,7 @@ class DFNet(nn.Module):
 
         # filter count for first stage
         self.stage_count = stage_count
-        self.init_filters = input_channels * channel_up_factor
+        self.init_filters = int(input_channels * channel_up_factor)
         # filter counts for later stages
         self.proj_dim = int(stem_downproj * self.init_filters)
         self.filter_nums = [int(self.proj_dim * (self.filter_grow_factor**i)) for i in range(self.stage_count)]

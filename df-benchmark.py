@@ -95,6 +95,10 @@ def parse_args():
                         action = 'store_true',
                         default=False,
                         help = "Store data post transformation to disk to save memory.")
+    parser.add_argument('--exp_name',
+                        type = str,
+                        default = f'{time.strftime("%Y%m%d-%H%M%S")}',
+                        help = "")
     return parser.parse_args()
 
 
@@ -270,7 +274,7 @@ if __name__ == "__main__":
     if not checkpoint_fname:
         checkpoint_fname = f'{model_name}' 
         checkpoint_fname += f'_{dataset}'
-        checkpoint_fname += f'_{time.strftime("%Y%m%d-%H%M%S")}'
+        checkpoint_fname += f'_{args.exp_name}'
         
     # create checkpoint directory if necesary
     if not os.path.exists(f'{checkpoint_dir}/{checkpoint_fname}/'):
@@ -337,6 +341,7 @@ if __name__ == "__main__":
             for batch_idx, (inputs, targets, sample_sizes) in enumerate(pbar):
 
                 inputs, targets = inputs.to(device), targets.to(device)
+                if inputs.size(0) <= 1: continue
 
                 # # # # # #
                 # DF prediction
@@ -390,6 +395,7 @@ if __name__ == "__main__":
             for batch_idx, (inputs, targets, sample_sizes) in enumerate(pbar):
 
                 inputs, targets = inputs.to(device), targets.to(device)
+                if inputs.size(0) <= 1: continue
 
                 # # # # # #
                 # DF prediction
