@@ -1,0 +1,6 @@
+{
+    "input_size": 7000,
+    "feature_list": [
+        "time_dirs"
+    ]
+}
