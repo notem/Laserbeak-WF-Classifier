@@ -1,0 +1,38 @@
+{
+    "input_size": 4000,
+    "filter_grow_factor": 1.1,
+    "channel_up_factor": 32,
+    "conv_expand_factor": 3,
+    "conv_dropout_p": 0.0,
+    "conv_skip": true,
+    "depth_wise": true,
+    "use_gelu": true,
+    "stem_downproj": 0.25,
+    "stage_count": 8,
+    "kernel_size": 3,
+    "pool_stride_size": 2,
+    "pool_size": 3,
+    "block_dropout_p": 0.1,
+    "mlp_hidden_dim": 1024,
+    "trans_depths": 2,
+    "trans_drop_path": 0.0,
+    "mhsa_kwargs": {
+        "head_dim": 10,
+        "use_conv_proj": true,
+        "kernel_size": 3,
+        "stride": 2,
+        "feedforward_style": "mlp",
+        "feedforward_ratio": 3,
+        "feedforward_drop": 0.0
+    },
+    "feature_list": [
+        "interval_dirs_up",
+	"interval_dirs_down",
+	"interval_dirs_sum",
+	"interval_dirs_sub",
+        "interval_iats",
+        "interval_cumul_norm",
+        "interval_times_norm",
+        "interval_rates"
+    ]
+}

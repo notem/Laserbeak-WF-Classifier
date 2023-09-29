@@ -41,6 +41,8 @@ class GenericWFDataset(data.Dataset):
                 per_batch_transforms = None, 
                 on_load_transforms = None,
                 tmp_directory = './tmp',
+                tmp_subdir = None,
+                keep_tmp = False,
                 **kwargs,
             ):
 
@@ -90,22 +92,38 @@ class GenericWFDataset(data.Dataset):
         # pre-apply transformations 
         self.tmp_data = None
         if on_load_transforms:
+            # setup tmp directory and filename map
             if tmp_directory is not None:
-                self.tmp_dir = f'{tmp_directory}/tmp{random.randint(0, 1000)}'
+                if tmp_subdir is not None:
+                    self.tmp_dir = os.path.join(tmp_directory, tmp_subdir, 'tr' if train else 'te')
+                else:
+                    self.tmp_dir = f'{tmp_directory}/tmp{random.randint(0, 1000)}'
                 if not os.path.exists(self.tmp_dir):
                     try:
                         os.makedirs(self.tmp_dir)
                     except:
                         pass
+                self.keep_tmp = keep_tmp
                 self.tmp_data = dict()
+
+            # do processing
             for ID in tqdm(self.ids, desc="Processing...", dynamic_ncols=True):
-                x = self.dataset[ID]
-                x = on_load_transforms(x)
-                # store transforms to disk 
+                x = self.dataset[ID]  # get sample by ID
+
+                # check if processed sample already exists in tmp
                 if self.tmp_data is not None:
                     filename = f'{self.tmp_dir}/{ID}.pt'
                     self.tmp_data[ID] = filename
+                    if os.path.exists(filename):
+                        continue
+
+                # apply processing to sample
+                x = on_load_transforms(x)
+
+                # store transforms to disk 
+                if self.tmp_data is not None:
                     torch.save(x, filename)
+                # store in memory
                 else:
                     self.dataset[ID] = x
  
@@ -122,11 +140,12 @@ class GenericWFDataset(data.Dataset):
         return X, self.labels[ID]
 
     def __del__(self):
-        try:
-            if self.tmp_data is not None:
-                shutil.rmtree(self.tmp_dir)
-        except:
-            pass
+        if not self.keep_tmp:
+            try:
+                if self.tmp_data is not None:
+                    shutil.rmtree(self.tmp_dir)
+            except:
+                print(f">>> Failed to clear temp directory \'{self.tmp_dir}\'!!")
 
 # # # #
 #
@@ -231,6 +250,34 @@ class BigEnough(GenericWFDataset):
             **kwargs
         )
 
+class Surakav(GenericWFDataset):
+    def __init__(self, root, *args, 
+            mon_tr_count = 90, unm_tr_count = 54000,
+            mon_te_count = 10, unm_te_count = 6000,
+            defense_mode = 'undef',
+            **kwargs):
+
+        data_dir = join(root, 'wf-surakav')
+        mon_raw_data_name = f'{defense_mode}-mon.pkl'
+
+        mon_suffix = f''
+        unm_suffix = f''
+
+        class_divisor = 1
+
+        super().__init__(
+            data_dir,
+            mon_raw_data_name,
+            None,
+            mon_suffix, 
+            unm_suffix, 
+            mon_tr_count, 0,
+            mon_te_count, 0,
+            *args, 
+            class_divisor = class_divisor, 
+            **kwargs
+        )
+
 
 # # # #
 #
@@ -289,7 +336,6 @@ def load_full_dataset(
                                 multisample_count = multisample_count,
                             )
         all_y_unm = np.ones(len(all_X_unm)) * unm_label
-        print(len(all_y), len(all_y_unm), unm_label)
         if (all_X is not None):
             all_X = np.concatenate((all_X, all_X_unm))
             all_y = np.concatenate((all_y, all_y_unm))
@@ -451,7 +497,8 @@ def collate_and_pad(batch, return_sample_sizes=True):
 
 DATASET_CHOICES = ['be', 'be-front', 'be-interspace', 'be-regulator', 'be-ts2', 'be-ts5', 
                    'amazon', 'amazon-300k', 'amazon-front', 'amazon-front-300k', 'amazon-interspace', 'amazon-interspace-300k',
-                   'webmd', 'webmd-300k', 'webmd-front', 'webmd-front-300k', 'webmd-interspace', 'webmd-interspace-300k']
+                   'webmd', 'webmd-300k', 'webmd-front', 'webmd-front-300k', 'webmd-interspace', 'webmd-interspace-300k',
+                   'gong', 'gong-surakav40', 'gong-surakav60', 'gong-front', 'gong-tamaraw']
 
 
 def load_data(dataset, 
@@ -592,6 +639,42 @@ def load_data(dataset,
                             root, 
                             defense_mode = 'interspace',
                             unm_te_count = 294000,
+                            **kwargs,
+                )
+
+    elif dataset == "gong":
+        data_obj = partial(Surakav, 
+                            root, 
+                            defense_mode = 'undef',
+                            **kwargs,
+                )
+
+    elif dataset == "gong-surakav40":
+        data_obj = partial(Surakav, 
+                            root, 
+                            defense_mode = 'surakav-0.4',
+                            **kwargs,
+                )
+
+    elif dataset == "gong-surakav60":
+        data_obj = partial(Surakav, 
+                            root, 
+                            defense_mode = 'surakav-0.6',
+                            **kwargs,
+                )
+
+
+    elif dataset == "gong-front":
+        data_obj = partial(Surakav, 
+                            root, 
+                            defense_mode = 'front',
+                            **kwargs,
+                )
+
+    elif dataset == "gong-tamaraw":
+        data_obj = partial(Surakav, 
+                            root, 
+                            defense_mode = 'tamaraw',
                             **kwargs,
                 )
 

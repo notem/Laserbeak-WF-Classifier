@@ -75,6 +75,10 @@ def parse_args():
                         default = 1.5e-3, 
                         type = float,
                         help = "Set optimizer learning rate.")
+    parser.add_argument('--bs', 
+                        default = 32, 
+                        type = int,
+                        help = "Training batch size.")
     parser.add_argument('--warmup', 
                         default = 10, 
                         type = int,
@@ -91,10 +95,21 @@ def parse_args():
                         default = 1,
                         type = int,
                         help = "Set the number of same-sample defended instances to use for defended datasets.")
+    parser.add_argument('--input_size', 
+                        default = None, 
+                        type = int,
+                        help = "Overwrite the config .json input length parameter.")
     parser.add_argument('--use_tmp', 
                         action = 'store_true',
                         default=False,
                         help = "Store data post transformation to disk to save memory.")
+    parser.add_argument('--tmp_name', 
+                        default = None,
+                        help = "The name of the subdirectory in which to store data.")
+    parser.add_argument('--keep_tmp', 
+                        action = 'store_true',
+                        default=False,
+                        help = "Do not clear processed data files upon program completion.")
     parser.add_argument('--exp_name',
                         type = str,
                         default = f'{time.strftime("%Y%m%d-%H%M%S")}',
@@ -132,8 +147,8 @@ if __name__ == "__main__":
     # # # # # #
     # finetune config
     # # # # # #
-    mini_batch_size = 64   # samples to fit on GPU
-    batch_size = 64        # when to update model
+    mini_batch_size = args.bs   # samples to fit on GPU
+    batch_size = args.bs        # when to update model
     accum = batch_size // mini_batch_size
     # # # # # #
     warmup_period   = args.warmup
@@ -144,6 +159,7 @@ if __name__ == "__main__":
     opt_wd          = 0.01
     label_smoothing = 0.1
     use_opl = False
+    opl_weight = 2
     include_unm = args.openworld
 
     # all trainable network parameters
@@ -203,6 +219,9 @@ if __name__ == "__main__":
                         ]
             }
 
+    if args.input_size is not None:
+        model_config['input_size'] = args.input_size
+
     print("==> Model configuration:")
     print(json.dumps(model_config, indent=4))
 
@@ -229,14 +248,16 @@ if __name__ == "__main__":
                     ]
 
     trainloader, testloader, classes = load_data(dataset, 
-                                                 mini_batch_size = mini_batch_size,
+                                                 batch_size = mini_batch_size,
                                                  tr_transforms = tr_transforms,
                                                  te_transforms = te_transforms,
                                                  tr_augments = tr_augments,
                                                  te_augments = te_augments,
                                                  include_unm = include_unm,
                                                  multisample_count = args.multisamples,
-                                                 tmp_directory = './tmp' if args.use_tmp else None,
+                                                 tmp_root = './tmp' if args.use_tmp else None,
+                                                 tmp_subdir = args.tmp_name,
+                                                 keep_tmp = args.keep_tmp,
                                                 )
     unm_class = classes-1 if include_unm else -1
 
@@ -315,9 +336,9 @@ if __name__ == "__main__":
         # s & d calculation
         dot_prod = torch.matmul(features, features.t())
         pos_total = (mask_pos[pos_idx] * dot_prod[pos_idx]).sum()
-        neg_total = torch.abs(mask_neg[pos_idx] * dot_prod[pos_idx]).sum()
+        neg_total = torch.abs(mask_neg * dot_prod).sum()
         pos_mean = pos_total / (mask_pos[pos_idx].sum() + 1e-6)
-        neg_mean = neg_total / (mask_neg[pos_idx].sum() + 1e-6)
+        neg_mean = neg_total / (mask_neg.sum() + 1e-6)
 
         # total loss
         loss = (1.0 - pos_mean) + (gamma * neg_mean)
@@ -352,7 +373,7 @@ if __name__ == "__main__":
                 if use_opl:
                     loss += orthogonal_proj_loss(feats, targets, 
                                                  pos_idx = torch.argwhere(targets != unm_class),  # exclude unm class samples
-                                                )
+                                                ) * opl_weight
 
                 train_loss += loss.item()
 
