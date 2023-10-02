@@ -1,4 +1,5 @@
 import torch
+from torch.nn import functional as F
 
 
 
@@ -41,14 +42,14 @@ class DataProcessor:
 
                 'burst_edges': [],  # a sparse representation that identifies whenever traffic changes direction
 
-                'cumul': ['cumul_norm'],  # per-packet cumulative sum (based on cumul)
+                'cumul': ['cumul_norm', 'interval_cumul'],  # per-packet cumulative sum (based on cumul)
                 'cumul_norm': [],         # normalize cumul features into [-1,+1] range, centered around the mean
                 'times_norm': [],         # normalize timestamp features into [-1,+1] range, centered around the mean
 
-                'iats': ['iat_dirs'],     # difference between consequtive timestamps (e.g., inter-arrival-times
+                'iats': ['iat_dirs', 'interval_iats'],     # difference between consequtive timestamps (e.g., inter-arrival-times
                 'iat_dirs': [],           # iats with direction encoded into the representation
 
-                'running_rates': ['running_rates_diff'],   # running average of flow rate (ignores direction)
+                'running_rates': ['running_rates_diff', 'interval_rates'],   # running average of flow rate (ignores direction)
                 'running_rates_diff': [],                  # instantaneous change of flow rate
                 'running_rates_decayed': ['up_rates_decayed', 'down_rates_decayed'],       # running average with exponential decay on old rates (expensive to compute)
                 'up_rates_decayed': [],       # up-direction only (non-aligned)
@@ -68,12 +69,24 @@ class DataProcessor:
                 'burst_filtered_time_dirs': [],                        # with direction encoded (non-aligned)
                 'inv_iat_logs': ['inv_iat_log_dirs'],    # log applied to the inverse of flow iats (adjust with +1 to avoid negative logs)
                 'inv_iat_log_dirs': [],                  # with pkt direction encoded
+
+                'interval_dirs_up': ['interval_dirs_sum', 'interval_dirs_sub'], 
+                'interval_dirs_down': ['interval_dirs_sum', 'interval_dirs_sub'], 
+                'interval_dirs_sum': [], 
+                'interval_dirs_sub': [], 
+                'interval_times': ['interval_times_norm'], 
+                'interval_times_norm': [], 
+                'interval_iats': [], 
+                'interval_cumul': ['interval_cumul_norm'], 
+                'interval_cumul_norm': [], 
+                'interval_rates': [],
              }
 
 
     def __init__(self, process_options = ('dirs',)):
         self.process_options = process_options if process_options else {}
         self.input_channels = len(self.process_options)
+        self.cache = dict()
 
         assert len(self.process_options) > 0
         assert all(opt in self.DEPENS.keys() for opt in self.process_options)
@@ -88,17 +101,23 @@ class DataProcessor:
 
     def _is_enabled(self, *opts):
         """if opt or any of its dependencies are in self.process_options, then func returns true"""
-        required = list(opts)
-        for opt in opts:
-            required.extend(self._resolve_depens(opt))
-        return any(opt in self.process_options for opt in required)
+        res = self.cache.get('-'.join(opts), None)
+        if res is not None:
+            return res
+        else:
+            required = list(opts)
+            for opt in opts:
+                required.extend(self._resolve_depens(opt))
+            res = any(opt in self.process_options for opt in required)
+            self.cache['-'.join(opt)] = res
+            return res
 
     def process(self, x):
         """Map raw metadata to processed pkt representations
         """
         size = len(x)
 
-        def fix_size(z):
+        def fix_size(z, size=size):
             if z.size(0) < size:
                 z = F.pad(z, (0,size - z.size(0)))
             elif z.size(0) > size:
@@ -223,9 +242,93 @@ class DataProcessor:
         if self._is_enabled('inv_iat_log_dirs'):
             feature_dict['inv_iat_log_dirs'] = inv_iat_logs * dirs
 
+        if self._is_enabled('interval_dirs_up', 'interval_dirs_down', 
+                            'interval_times', 'interval_iats', 
+                            'interval_cumul', 'interval_rates'):
+            interval_size = 0.01  # 10ms intervals
+
+            num_intervals = int(torch.ceil(torch.max(times) / interval_size).item())
+
+            split_points = torch.arange(0, num_intervals) * interval_size
+            split_points = torch.searchsorted(times, split_points)
+
+            if self._is_enabled('interval_dirs_up','interval_dirs_down'):
+                dirs_subs = torch.tensor_split(dirs, split_points)
+
+                interval_dirs_up = torch.zeros(num_intervals+1)
+                interval_dirs_down = torch.zeros(num_intervals+1)
+                for i,tensor in enumerate(dirs_subs):
+                    size = tensor.numel()
+                    if size > 0:
+                        up = (tensor >= 0).sum()
+                        interval_dirs_up[i] = up
+                        interval_dirs_down[i] = size - up
+
+            if self._is_enabled('interval_dirs_up'):
+                feature_dict['interval_dirs_up'] = interval_dirs_up
+
+            if self._is_enabled('interval_dirs_down'):
+                feature_dict['interval_dirs_down'] = interval_dirs_down
+
+            if self._is_enabled('interval_dirs_sum'):
+                feature_dict['interval_dirs_sum'] = interval_dirs_up + interval_dirs_down
+
+            if self._is_enabled('interval_dirs_sub'):
+                feature_dict['interval_dirs_sub'] = interval_dirs_up - interval_dirs_down
+
+            if self._is_enabled('interval_times'):
+                times_subs = torch.tensor_split(times, split_points)
+                interval_times = torch.zeros(num_intervals+1)
+                for i,tensor in enumerate(times_subs):
+                    if tensor.numel() > 0:
+                        interval_times[i] = tensor.mean()
+                    elif i > 0:
+                        interval_times[i] = interval_times[i-1]
+                feature_dict['interval_times'] = interval_times
+
+            if self._is_enabled('interval_times_norm'):
+                interval_times_norm = interval_times.clone()
+                interval_times_norm -= torch.mean(interval_times_norm)
+                interval_times_norm /= torch.amax(torch.abs(interval_times_norm))
+                feature_dict['interval_times_norm'] = interval_times_norm
+
+            if self._is_enabled('interval_iats'):
+                iats_subs = torch.tensor_split(iats, split_points)
+                interval_iats = torch.zeros(num_intervals+1)
+                for i,tensor in enumerate(iats_subs):
+                    if tensor.numel() > 0:
+                        interval_iats[i] = tensor.mean()
+                    elif i > 0:
+                        interval_iats[i] = interval_iats[i-1] + interval_size
+                feature_dict['interval_iats'] = interval_iats
+
+            if self._is_enabled('interval_cumul'):
+                cumul_subs = torch.tensor_split(cumul, split_points)
+                interval_cumul = torch.zeros(num_intervals+1)
+                for i,tensor in enumerate(cumul_subs):
+                    if tensor.numel() > 0:
+                        interval_cumul[i] = tensor.mean()
+                    elif i > 0:
+                        interval_cumul[i] = interval_cumul[i-1]
+                feature_dict['interval_cumul'] = interval_cumul
+
+            if self._is_enabled('interval_cumul_norm'):
+                interval_cumul_norm = interval_cumul.clone()
+                interval_cumul_norm -= torch.mean(interval_cumul_norm)
+                interval_cumul_norm /= torch.amax(torch.abs(interval_cumul_norm))
+                feature_dict['interval_cumul_norm'] = interval_cumul_norm
+
+            if self._is_enabled('interval_rates'):
+                rates_subs = torch.tensor_split(running_rates, split_points)
+                interval_rates = torch.zeros(num_intervals+1)
+                for i,tensor in enumerate(rates_subs):
+                    if tensor.numel() > 0:
+                        interval_rates[i] = tensor.mean()
+                feature_dict['interval_rates'] = interval_rates
 
         # adjust feature vectors sizes to match traffic sequence length and stack
-        feature_stack = list(fix_size(feature_dict[opt]) for opt in self.process_options)
+        target_size = max(*[t.numel() for t in feature_dict.values()])
+        feature_stack = list(fix_size(feature_dict[opt], target_size) for opt in self.process_options)
         features = torch.nan_to_num(torch.stack(feature_stack, dim=-1))
 
         #assert not torch.any(features.isnan())
