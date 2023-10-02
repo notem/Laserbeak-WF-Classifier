@@ -252,13 +252,14 @@ class BigEnough(GenericWFDataset):
 
 class Surakav(GenericWFDataset):
     def __init__(self, root, *args, 
-            mon_tr_count = 90, unm_tr_count = 54000,
-            mon_te_count = 10, unm_te_count = 6000,
+            mon_tr_count = 90, unm_tr_count = 9000,
+            mon_te_count = 10, unm_te_count = 1000,
             defense_mode = 'undef',
             **kwargs):
 
         data_dir = join(root, 'wf-surakav')
         mon_raw_data_name = f'{defense_mode}-mon.pkl'
+        unm_raw_data_name = f'{defense_mode}-unm.pkl'
 
         mon_suffix = f''
         unm_suffix = f''
@@ -268,11 +269,11 @@ class Surakav(GenericWFDataset):
         super().__init__(
             data_dir,
             mon_raw_data_name,
-            None,
+            unm_raw_data_name,
             mon_suffix, 
             unm_suffix, 
-            mon_tr_count, 0,
-            mon_te_count, 0,
+            mon_tr_count, unm_tr_count,
+            mon_te_count, unm_te_count,
             *args, 
             class_divisor = class_divisor, 
             **kwargs
@@ -498,7 +499,9 @@ def collate_and_pad(batch, return_sample_sizes=True):
 DATASET_CHOICES = ['be', 'be-front', 'be-interspace', 'be-regulator', 'be-ts2', 'be-ts5', 
                    'amazon', 'amazon-300k', 'amazon-front', 'amazon-front-300k', 'amazon-interspace', 'amazon-interspace-300k',
                    'webmd', 'webmd-300k', 'webmd-front', 'webmd-front-300k', 'webmd-interspace', 'webmd-interspace-300k',
-                   'gong', 'gong-surakav40', 'gong-surakav60', 'gong-front', 'gong-tamaraw']
+                   'gong', 'gong-surakav4', 'gong-surakav6', 'gong-front', 'gong-tamaraw',
+                   'gong-50k', 'gong-surakav4-50k', 'gong-surakav6-50k', 'gong-front-50k', 'gong-tamaraw-50k',
+                   ]
 
 
 def load_data(dataset, 
@@ -649,20 +652,19 @@ def load_data(dataset,
                             **kwargs,
                 )
 
-    elif dataset == "gong-surakav40":
+    elif dataset == "gong-surakav4":
         data_obj = partial(Surakav, 
                             root, 
                             defense_mode = 'surakav-0.4',
                             **kwargs,
                 )
 
-    elif dataset == "gong-surakav60":
+    elif dataset == "gong-surakav6":
         data_obj = partial(Surakav, 
                             root, 
                             defense_mode = 'surakav-0.6',
                             **kwargs,
                 )
-
 
     elif dataset == "gong-front":
         data_obj = partial(Surakav, 
@@ -675,6 +677,46 @@ def load_data(dataset,
         data_obj = partial(Surakav, 
                             root, 
                             defense_mode = 'tamaraw',
+                            **kwargs,
+                )
+
+    elif dataset == "gong-50k":
+        data_obj = partial(Surakav, 
+                            root, 
+                            defense_mode = 'undef',
+                            unm_te_count = 50000,
+                            **kwargs,
+                )
+
+    elif dataset == "gong-surakav4-50k":
+        data_obj = partial(Surakav, 
+                            root, 
+                            defense_mode = 'surakav-0.4',
+                            unm_te_count = 50000,
+                            **kwargs,
+                )
+
+    elif dataset == "gong-surakav6-50k":
+        data_obj = partial(Surakav, 
+                            root, 
+                            defense_mode = 'surakav-0.6',
+                            unm_te_count = 50000,
+                            **kwargs,
+                )
+
+    elif dataset == "gong-front-50k":
+        data_obj = partial(Surakav, 
+                            root, 
+                            defense_mode = 'front',
+                            unm_te_count = 50000,
+                            **kwargs,
+                )
+
+    elif dataset == "gong-tamaraw-50k":
+        data_obj = partial(Surakav, 
+                            root, 
+                            defense_mode = 'tamaraw',
+                            unm_te_count = 50000,
                             **kwargs,
                 )
 
