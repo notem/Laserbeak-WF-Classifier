@@ -22,6 +22,7 @@ from src.data import *
 #from src.deformdfnet import DFNet
 from src.transdfnet import DFNet
 from src.processor import DataProcessor
+from src.cls_cvt import ConvolutionalVisionTransformer
 
 
 
@@ -34,8 +35,6 @@ torch.autograd.profiler.emit_nvtx(False)
 
 # auto-optimize cudnn ops
 torch.backends.cudnn.benchmark = True
-
-
 
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -114,6 +113,10 @@ def parse_args():
                         type = str,
                         default = f'{time.strftime("%Y%m%d-%H%M%S")}',
                         help = "")
+    parser.add_argument('--run_cvt',
+                        action = 'store_true',
+                        default=False,
+                        help="Use Convolutional Vision Transformer model.")
     return parser.parse_args()
 
 
@@ -142,7 +145,10 @@ if __name__ == "__main__":
     results_dir = args.results_dir
     dataset = args.dataset
 
-    model_name = "DF"
+    if args.run_cvt:
+        model_name = "CvT"
+    else:
+        model_name = "DF"
 
     # # # # # #
     # finetune config
@@ -264,12 +270,15 @@ if __name__ == "__main__":
     # # # # # #
     # define base metaformer model
     # # # # # #
-    net = DFNet(classes, input_channels, 
-                **model_config)
-    net = net.to(device)
-    if resumed:
-        net_state_dict = resumed['model']
-        net.load_state_dict(net_state_dict)
+    if args.run_cvt:
+        net = ConvolutionalVisionTransformer(in_chans=input_channels).to(device)
+    else:
+        net = DFNet(classes, input_channels, 
+                    **model_config)
+        net = net.to(device)
+        if resumed:
+            net_state_dict = resumed['model']
+            net.load_state_dict(net_state_dict)
     params += net.parameters()
 
     # # # # # #
@@ -366,14 +375,19 @@ if __name__ == "__main__":
 
                 # # # # # #
                 # DF prediction
-                cls_pred, feats = net(inputs, 
-                                      sample_sizes = sample_sizes, 
-                                      return_feats = True)
-                loss = criterion(cls_pred, targets)
-                if use_opl:
-                    loss += orthogonal_proj_loss(feats, targets, 
-                                                 pos_idx = torch.argwhere(targets != unm_class),  # exclude unm class samples
-                                                ) * opl_weight
+                if args.run_cvt:
+                    cls_pred = net(inputs)
+                    loss = criterion(cls_pred, targets)
+                else:
+                    cls_pred, feats = net(inputs, 
+                                          sample_sizes = sample_sizes, 
+                                          return_feats = True)
+
+                    loss = criterion(cls_pred, targets)
+                    if use_opl:
+                        loss += orthogonal_proj_loss(feats, targets, 
+                                                     pos_idx = torch.argwhere(targets != unm_class),  # exclude unm class samples
+                                                    ) * opl_weight
 
                 train_loss += loss.item()
 
@@ -420,7 +434,10 @@ if __name__ == "__main__":
 
                 # # # # # #
                 # DF prediction
-                cls_pred = net(inputs, sample_sizes = sample_sizes)
+                if args.run_cvt:
+                    cls_pred = net(inputs)
+                else:
+                    cls_pred = net(inputs, sample_sizes = sample_sizes)
                 loss = criterion(cls_pred, targets)
 
                 test_loss += loss.item()
