@@ -10,123 +10,6 @@ from functools import partial
 from src.layers import *
 
 
-
-#class MHSAttention(nn.Module):
-#    """
-#    Vanilla self-attention from Transformer: https://arxiv.org/abs/1706.03762.
-#    Modified from timm.
-#    Added support for conv. projections (from CvT) and uses PyTorch 2.0 accelerated attention function
-#    Added support for relative positional encodings: 
-#    """
-#    def __init__(self, dim, 
-#                 head_dim = None, num_heads = None, 
-#                 use_conv_proj = False,
-#                 attn_drop = 0., proj_drop = 0., head_drop = 0.,
-#                 bias = False,
-#                 **kwargs,
-#                 ):
-#        super().__init__()
-#
-#        assert head_dim is not None or num_heads is not None
-#
-#        if head_dim is not None:
-#            self.head_dim = head_dim
-#            self.num_heads = num_heads if num_heads else dim // head_dim
-#        else:
-#            self.head_dim = dim // num_heads
-#            self.num_heads = num_heads
-#        
-#        self.scale = self.head_dim ** -0.5
-#        if self.num_heads == 0:
-#            self.num_heads = 1
-#
-#        self.attention_dim = self.num_heads * self.head_dim
-#
-#        # Standard MHSA
-#        # apply linear projections to produce the query, key, & value vectors
-#        if not use_conv_proj:
-#            self.qkv_proj = nn.Linear(dim, self.attention_dim * 3, bias = bias)
-#            self.qkv = lambda x, with_cls_tok: self.qkv_proj(x).view(x.shape[0], -1, 3, self.num_heads, self.head_dim).permute(2, 0, 3, 1, 4).unbind(0)
-#
-#        # CvT MHSA - https://github.com/microsoft/CvT/blob/f851e681966390779b71380d2600b52360ff4fe1/lib/models/cls_cvt.py#L77
-#        # replaces linear projections with depth-wise convolutions
-#        # conv. strides > 1 can be used to reduce MHSA computations
-#        else:
-#            kernel_size = kwargs.get('kernel_size', 3)
-#            stride = kwargs.get('stride', 1)
-#            dwconv = partial(nn.Conv1d,
-#                             groups = dim,
-#                             kernel_size = kernel_size,
-#                             padding = kernel_size // 2,
-#                             bias = bias)
-#            self.q_conv_proj = dwconv(dim, dim)
-#            self.k_conv_proj = dwconv(dim, dim, stride = stride)
-#            self.v_conv_proj = dwconv(dim, dim, stride = stride)
-#            self.q_linear_proj = nn.Linear(dim, self.attention_dim, bias = bias)
-#            self.k_linear_proj = nn.Linear(dim, self.attention_dim, bias = bias)
-#            self.v_linear_proj = nn.Linear(dim, self.attention_dim, bias = bias)
-#
-#            def conv_qkv(x, conv_proj, linear_proj, with_cls_tok=False):
-#                """Apply depth-wise conv. layer and linear layers to reproject tokens into new space.
-#                """
-#                if with_cls_tok:    # don't include class token in conv. projection
-#                    cls_token, x = torch.split(x, [1, x.shape[1]-1], dim=1)
-#
-#                # dw conv. followed by linear projection as used by CvT
-#                x = linear_proj(conv_proj(x.transpose(1, 2)).transpose(1, 2))
-#
-#                if with_cls_tok:    # class token receives no linear projection in CvT?
-#                    #cls_token = linear_proj(cls_token)
-#                    x = torch.cat((cls_token, x), dim=1)
-#
-#                # reshape and permute
-#                x = x.view(x.shape[0], -1, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
-#                return x
-#
-#            self.qkv = lambda x, with_cls_tok: (conv_qkv(x, self.q_conv_proj, self.q_linear_proj, with_cls_tok), 
-#                                                conv_qkv(x, self.k_conv_proj, self.k_linear_proj, with_cls_tok), 
-#                                                conv_qkv(x, self.v_conv_proj, self.v_linear_proj, with_cls_tok))
-#
-#        self.attn_drop = nn.Dropout(attn_drop)
-#        self.attn_drop_p = attn_drop
-#
-#        self.proj = nn.Linear(self.attention_dim, dim)
-#        self.proj_drop = nn.Dropout(proj_drop)
-#
-#        self.head_drop = nn.Dropout2d(head_drop)
-#
-#        
-#    def forward(self, x, 
-#                attn_mask = None, 
-#                with_cls_tok = False, 
-#                **kwargs):
-#
-#        B, N, C = x.shape
-#        q, k, v = self.qkv(x, with_cls_tok)
-#
-#        if attn_mask is not None:
-#            attn_mask = attn_mask.masked_fill(~attn_mask, -float('inf')) if attn_mask.dtype==torch.bool else attn_mask
-#            attn_mask = attn_mask[:,None,:,None].repeat(1, q.shape[1], 1, k.shape[2])
-#
-#        #"""Old, manual ops to produce self-attention
-#        #attn = (q @ k.transpose(-2, -1)) * self.scale
-#        #attn = attn.softmax(dim=-1)
-#        #attn = self.attn_drop(attn)
-#        #x = (attn @ v)
-#        #"""
-#        x = F.scaled_dot_product_attention(q, k, v, 
-#                                    attn_mask = attn_mask, 
-#                                    dropout_p = self.attn_drop_p, 
-#                                    cs_causal = False)
-#        self.head_drop(x)
-#        x = x.transpose(1, 2).reshape(B, N, self.attention_dim)
-#
-#        x = self.proj(x)
-#        x = self.proj_drop(x)
-#        return x
-
-
-
 class MHSAttention(nn.Module):
     """
     Vanilla self-attention from Transformer: https://arxiv.org/abs/1706.03762.
@@ -138,9 +21,7 @@ class MHSAttention(nn.Module):
                  head_dim = None, num_heads = None, 
                  use_conv_proj = False,
                  attn_drop = 0., proj_drop = 0., head_drop = 0.,
-                 bias = False,
-                 use_rel_pos = True,
-                 rel_pos_max_length = 3000,
+                 bias = True,
                  **kwargs,
                  ):
         super().__init__()
@@ -244,7 +125,6 @@ class MHSAttention(nn.Module):
         x = self.proj(x)
         x = self.proj_drop(x)
         return x
-
 
 
 class ConvMixer(nn.Module):
