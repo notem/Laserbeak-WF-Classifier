@@ -71,11 +71,11 @@ def parse_args():
                         default = False,
                         help = 'Perform evaluation only.')
     parser.add_argument('--lr', 
-                        default = 1.5e-3, 
+                        default = 2e-3, 
                         type = float,
                         help = "Set optimizer learning rate.")
     parser.add_argument('--bs', 
-                        default = 32, 
+                        default = 128, 
                         type = int,
                         help = "Training batch size.")
     parser.add_argument('--warmup', 
@@ -117,6 +117,10 @@ def parse_args():
                         action = 'store_true',
                         default=False,
                         help="Use Convolutional Vision Transformer model.")
+    parser.add_argument('--orig_optim',
+                        action = 'store_true',
+                        default = False,
+                        help = "Use original DF optimizer and learning rate schedule configuration.")
     return parser.parse_args()
 
 
@@ -162,8 +166,8 @@ if __name__ == "__main__":
     epochs          = args.epochs
     opt_lr          = args.lr
     opt_betas       = (0.9, 0.999)
-    opt_wd          = 0.01
-    label_smoothing = 0.1
+    opt_wd          = 0.01 if not args.orig_optim else 0.0
+    label_smoothing = 0.1 if not args.orig_optim else 0.0
     use_opl = False
     opl_weight = 2
     include_unm = args.openworld
@@ -178,52 +182,7 @@ if __name__ == "__main__":
         with open(args.config, 'r') as fi:
             model_config = json.load(fi)
     else:
-        model_config = {
-                'input_size': 12000,
-                #'input_size': 10000,
-                #'input_size': 7000,
-
-                'filter_grow_factor': 1.3,  # filter count scaling factor between stages
-                'channel_up_factor': 18,    # filter count for each input channel (first stage)
-
-                'conv_expand_factor': 3,    # filter count expansion ratio within a stage conv. block
-                'conv_dropout_p': 0.,       # dropout used inside conv. block
-                'conv_skip': True,          # add skip connections for conv. blocks (after first stage)
-                'depth_wise': True,         # use depth-wise convolutions in first stage
-                'use_gelu': True,
-                'stem_downproj': 0.5,
-
-                'stage_count': 5,           # number of downsampling stages
-                'kernel_size': 7,           # kernel size used by stage conv. blocks
-                'pool_stride_size': 4,      # downsampling pool stride
-                'pool_size': 7,             # downsampling pool width
-                'block_dropout_p': 0.1,     # dropout used after each stage
-
-                'mlp_hidden_dim': 1024,
-
-                'trans_depths': 2,  # number of transformer layers used in each stage
-                'mhsa_kwargs': {            # transformer layer definitions
-                                'head_dim': 10,
-                                'use_conv_proj': True, 'kernel_size': 7, 'stride': 4,
-                                'feedforward_style': 'mlp',
-                                'feedforward_ratio': 3,
-                                'feedforward_drop': 0.,
-                               },
-
-                'feature_list': [ 
-                                    #'dirs', 
-                                    #'cumul', 
-                                    #'times', 
-                                    #'iats', 
-                                    'time_dirs', 
-                                    'times_norm', 
-                                    'cumul_norm', 
-                                    'iat_dirs', 
-                                    'inv_iat_log_dirs', 
-                                    'running_rates', 
-                                    #'running_rates_diff',
-                        ]
-            }
+        model_config = {'input_size': 10000,}
 
     if args.input_size is not None:
         model_config['input_size'] = args.input_size
@@ -284,8 +243,12 @@ if __name__ == "__main__":
     # # # # # #
     # optimizer and params, reload from resume is possible
     # # # # # #
-    optimizer = optim.AdamW(params, 
-            lr=opt_lr, betas=opt_betas, weight_decay=opt_wd)
+    if args.orig_optim:
+        optimizer = optim.Adamax(params,
+                lr=opt_lr, betas=opt_betas, weight_decay=opt_wd)
+    else:
+        optimizer = optim.AdamW(params, 
+                lr=opt_lr, betas=opt_betas, weight_decay=opt_wd)
     if resumed and resumed.get('opt', None):
         opt_state_dict = resumed['opt']
         optimizer.load_state_dict(opt_state_dict)
@@ -293,7 +256,10 @@ if __name__ == "__main__":
     last_epoch = -1
     if resumed and resumed['epoch']:    # if resuming from a finetuning checkpoint
         last_epoch = resumed['epoch']
-    scheduler = transformers.get_cosine_schedule_with_warmup(optimizer,
+    if args.orig_optim:
+        scheduler = None
+    else:
+        scheduler = transformers.get_cosine_schedule_with_warmup(optimizer,
                                                     num_warmup_steps = len(trainloader) * warmup_period // accum,
                                                     num_training_steps = len(trainloader) * epochs // accum,
                                                     num_cycles = 0.5,
@@ -365,9 +331,12 @@ if __name__ == "__main__":
         train_loss = 0.
         train_acc = 0
         n = 0
-        with tqdm(trainloader, 
-                desc=f"Epoch {i} Train [lr={scheduler.get_last_lr()[0]:.2e}]", 
-                dynamic_ncols=True) as pbar:
+
+        if scheduler is None:
+            bar_desc = f"Epoch {i} Train [lr={opt_lr:.2e}]"
+        else:
+            bar_desc = f"Epoch {i} Train [lr={scheduler.get_last_lr()[0]:.2e}]"
+        with tqdm(trainloader, desc = bar_desc, dynamic_ncols = True) as pbar:
             for batch_idx, (inputs, targets, sample_sizes) in enumerate(pbar):
 
                 inputs, targets = inputs.to(device), targets.to(device)
@@ -403,7 +372,8 @@ if __name__ == "__main__":
                     # update weights, update scheduler, and reset optimizer after a full batch is completed
                     if (batch_idx+1) % accum == 0 or batch_idx+1 == len(trainloader):
                         optimizer.step()
-                        scheduler.step()
+                        if scheduler is not None:
+                            scheduler.step()
                         #optimizer.zero_grad()
                         for param in params:
                             param.grad = None
@@ -412,7 +382,7 @@ if __name__ == "__main__":
                                   'acc': train_acc/n,
                                   'loss': train_loss/(batch_idx+1),
                                   })
-                pbar.set_description(f"Epoch {i} Train [lr={scheduler.get_last_lr()[0]:.2e}]")
+                pbar.set_description(bar_desc)
 
         train_loss /= batch_idx + 1
         return train_loss, train_acc/n
