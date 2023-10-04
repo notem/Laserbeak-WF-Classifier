@@ -24,8 +24,6 @@ from src.transdfnet import DFNet
 from src.processor import DataProcessor
 from src.cls_cvt import ConvolutionalVisionTransformer
 
-
-
 # enable if NaN or other odd behavior appears
 #torch.autograd.set_detect_anomaly(True)
 # disable any unnecessary logging / debugging
@@ -162,7 +160,7 @@ if __name__ == "__main__":
     epochs          = args.epochs
     opt_lr          = args.lr
     opt_betas       = (0.9, 0.999)
-    opt_wd          = 0.01
+    opt_wd          = .1
     label_smoothing = 0.1
     use_opl = False
     opl_weight = 2
@@ -216,9 +214,9 @@ if __name__ == "__main__":
                                     #'times', 
                                     #'iats', 
                                     'time_dirs', 
-                                    'times_norm', 
+                                    #'times_norm', 
                                     'cumul_norm', 
-                                    'iat_dirs', 
+                                    #'iat_dirs', 
                                     'inv_iat_log_dirs', 
                                     'running_rates', 
                                     #'running_rates_diff',
@@ -275,10 +273,13 @@ if __name__ == "__main__":
     else:
         net = DFNet(classes, input_channels, 
                     **model_config)
-        net = net.to(device)
+        net.to('cuda')
         if resumed:
             net_state_dict = resumed['model']
-            net.load_state_dict(net_state_dict)
+            if isinstance(net, torch.nn.DataParallel):
+                net.module.load_state_dict(net_state_dict)
+            else:
+                net.load_state_dict(net_state_dict)
     params += net.parameters()
 
     # # # # # #
@@ -426,6 +427,7 @@ if __name__ == "__main__":
         n = 0
         thresholds = np.linspace(0.0, 0.99, num=10, endpoint=True)
         res = np.zeros((len(thresholds), 4))
+        net.eval()
         with tqdm(testloader, desc=f"Epoch {i} Test", dynamic_ncols=True) as pbar:
             for batch_idx, (inputs, targets, sample_sizes) in enumerate(pbar):
 
@@ -489,7 +491,10 @@ if __name__ == "__main__":
         test_acc /= n
         return test_loss, test_acc
 
-
+    if torch.cuda.device_count() > 1:
+        print("Using", torch.cuda.device_count(), "GPUs")
+        net = torch.nn.DataParallel(net)
+ 
     # run eval only
     if eval_only:
         if resumed:
