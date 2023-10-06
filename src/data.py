@@ -615,6 +615,14 @@ def load_data(dataset,
                             **kwargs,
                 )
 
+    elif dataset == 'webmd-300k':
+        data_obj = partial(WebMDSingleSite, 
+                            root, 
+                            defense_mode = 'undef',
+                            unm_te_count = 294000,
+                            **kwargs,
+                )
+
     elif dataset == 'webmd-front':
         data_obj = partial(WebMDSingleSite, 
                             root, 
