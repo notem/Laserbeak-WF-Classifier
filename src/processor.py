@@ -46,7 +46,7 @@ class DataProcessor:
                 'cumul_norm': [],         # normalize cumul features into [-1,+1] range, centered around the mean
                 'times_norm': [],         # normalize timestamp features into [-1,+1] range, centered around the mean
 
-                'iats': ['iat_dirs', 'interval_iats'],     # difference between consequtive timestamps (e.g., inter-arrival-times
+                'iats': ['iat_dirs', 'interval_iats', 'running_rates'],     # difference between consequtive timestamps (e.g., inter-arrival-times
                 'iat_dirs': [],           # iats with direction encoded into the representation
 
                 'running_rates': ['running_rates_diff', 'interval_rates'],   # running average of flow rate (ignores direction)
@@ -245,7 +245,7 @@ class DataProcessor:
         if self._is_enabled('interval_dirs_up', 'interval_dirs_down', 
                             'interval_times', 'interval_iats', 
                             'interval_cumul', 'interval_rates'):
-            interval_size = 0.01  # 10ms intervals
+            interval_size = 0.02  # 20ms intervals
 
             num_intervals = int(torch.ceil(torch.max(times) / interval_size).item())
 
