@@ -121,6 +121,14 @@ def parse_args():
                         action = 'store_true',
                         default = False,
                         help = "Use original DF optimizer and learning rate schedule configuration.")
+    parser.add_argument('--features', 
+                        default=None, type=str, 
+                        help='Overwrite the features used in the config file.')
+    parser.add_argument('--subpages', 
+                        action='store_true', default=False, 
+                        help="Treat website subpages as distinct labels.")
+    parser.add_argument('--label_smoothing', default=0.1, type=float, 
+                        help="Set the label smoothing value.")
     return parser.parse_args()
 
 
@@ -167,7 +175,7 @@ if __name__ == "__main__":
     opt_lr          = args.lr
     opt_betas       = (0.9, 0.999)
     opt_wd          = 0.01 if not args.orig_optim else 0.0
-    label_smoothing = 0.1 if not args.orig_optim else 0.0
+    label_smoothing = args.label_smoothing if not args.orig_optim else 0.0
     use_opl = False
     opl_weight = 2
     include_unm = args.openworld
@@ -186,6 +194,8 @@ if __name__ == "__main__":
 
     if args.input_size is not None:
         model_config['input_size'] = args.input_size
+    if args.features is not None:
+        model_config['feature_list'] = [args.features]
 
     print("==> Model configuration:")
     print(json.dumps(model_config, indent=4))
@@ -223,7 +233,9 @@ if __name__ == "__main__":
                                                  tmp_root = './tmp' if args.use_tmp else None,
                                                  tmp_subdir = args.tmp_name,
                                                  keep_tmp = args.keep_tmp,
+                                                 subpage_as_labels = args.subpages,
                                                 )
+    print(classes)
     unm_class = classes-1 if include_unm else -1
 
     # # # # # #
@@ -394,7 +406,7 @@ if __name__ == "__main__":
         test_loss = 0.
         test_acc = 0
         n = 0
-        thresholds = np.linspace(0.0, 0.99, num=10, endpoint=True)
+        thresholds = np.linspace(0.0, 1.0, num=10, endpoint=False)
         res = np.zeros((len(thresholds), 4))
         with tqdm(testloader, desc=f"Epoch {i} Test", dynamic_ncols=True) as pbar:
             for batch_idx, (inputs, targets, sample_sizes) in enumerate(pbar):
