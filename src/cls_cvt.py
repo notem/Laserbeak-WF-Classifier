@@ -368,23 +368,24 @@ class ConvEmbed(nn.Module):
             nn.Conv1d(embed_dim, embed_dim, 8, 1, 0),
             nn.BatchNorm1d(embed_dim),
             nn.LeakyReLU(.1),
-            nn.MaxPool1d(8, 4, 0),
-            nn.Dropout(.1),
+            nn.MaxPool1d(8, 3, 0),
+            nn.Dropout(.2),
         )
         self.layer2 = nn.Sequential(
-            nn.Conv1d(embed_dim, embed_dim, 8, 1, 0),
+            nn.Conv1d(embed_dim, embed_dim, 4, 1, 0),
             nn.BatchNorm1d(embed_dim),
             nn.LeakyReLU(.1),
-            nn.Conv1d(embed_dim, embed_dim, 8, 1, 0),
+            nn.Conv1d(embed_dim, embed_dim, 4, 1, 0),
             nn.BatchNorm1d(embed_dim),
             nn.LeakyReLU(.1),
             nn.MaxPool1d(8, 2, 0),
-            nn.Dropout(.1),
+            nn.Dropout(.2),
         )
 
 
     def forward(self, x):
-        x = self.layer1(x)
+        x = self.layer2(self.layer1(x))
+        #x = self.layer1(x)
 
         B, C, W = x.shape
         x = rearrange(x, 'b c w -> b w c')
@@ -519,7 +520,7 @@ class VisionTransformer(nn.Module):
 class ConvolutionalVisionTransformer(nn.Module):
     def __init__(self,
                  in_chans=6,
-                 num_classes=95,
+                 num_classes=101,
                  act_layer=nn.GELU,
                  norm_layer=nn.LayerNorm,
                  init='trunc_norm',
@@ -539,9 +540,9 @@ class ConvolutionalVisionTransformer(nn.Module):
                 'num_heads': [1, 3, 6][i],
                 'mlp_ratio': [4.0, 4.0, 4.0][i],
                 'qkv_bias': [True, True, True][i],
-                'drop_rate': [.1, .1, .1][i],
-                'attn_drop_rate': [.4, .4, .4][i],
-                'drop_path_rate': [.1, .1, .1][i],
+                'drop_rate': [0.1, 0.1, 0.1][i],
+                'attn_drop_rate': [0.1, 0.1, 0.1][i],
+                'drop_path_rate': [0.0, 0.0, 0.2][i],
                 'with_cls_token': [False, False, True][i],
                 'method': ['dw_bn', 'dw_bn', 'dw_bn'][i],
                 'kernel_size': [3, 3, 3][i],
@@ -549,6 +550,7 @@ class ConvolutionalVisionTransformer(nn.Module):
                 'padding_kv': [1, 1, 1][i],
                 'stride_kv': [2, 2, 2][i],
                 'stride_q': [1, 1, 1][i],
+                'pos_embed': [True, True, True],
             }
 
             stage = VisionTransformer(
@@ -578,14 +580,14 @@ class ConvolutionalVisionTransformer(nn.Module):
             nn.Linear(dim_embed, 128),
             nn.BatchNorm1d(128),
             nn.LeakyReLU(.1),
-            nn.Dropout(.1)
+            nn.Dropout(.2)
         )
 
         self.fc2 = nn.Sequential(
             nn.Linear(128, 128),
             nn.BatchNorm1d(128),
             nn.LeakyReLU(.1),
-            nn.Dropout(.1)
+            nn.Dropout(.3)
         )
 
         self.out = nn.Sequential(nn.Linear(128, num_classes),)
@@ -668,6 +670,6 @@ class ConvolutionalVisionTransformer(nn.Module):
 
     def forward(self, x):
         x = self.forward_features(x)
-        x = self.head(x)
+        x = self.out(self.fc2(self.fc1(x)))
 
         return x
