@@ -64,10 +64,10 @@ class DataProcessor:
                 'up_rates_sparse': [],        # sparsified, but pck-aligned sequence
                 'down_rates_sparse': [],      # sparsified, but pck-aligned sequence
 
-                'flow_iats': ['burst_filtered_times', 'inv_iat_logs'],  # up & down iats merged into one sequence (aligned with time/dir seqs)
+                'flow_iats': ['burst_filtered_times', 'inv_iat_logs'], # up & down iats merged into one sequence (aligned with time/dir seqs)
                 'burst_filtered_times': ['burst_filtered_time_dirs'],  # filtered sequence with large gaps removed (non-aligned)
                 'burst_filtered_time_dirs': [],                        # with direction encoded (non-aligned)
-                'inv_iat_logs': ['inv_iat_log_dirs'],    # log applied to the inverse of flow iats (adjust with +1 to avoid negative logs)
+                'inv_iat_logs': ['inv_iat_log_dirs', 'interval_inv_iat_logs'],  # log applied to the inverse of flow iats (adjust with +1 to avoid negative logs)
                 'inv_iat_log_dirs': [],                  # with pkt direction encoded
 
                 'interval_dirs_up': ['interval_dirs_sum', 'interval_dirs_sub'], 
@@ -77,6 +77,7 @@ class DataProcessor:
                 'interval_times': ['interval_times_norm'], 
                 'interval_times_norm': [], 
                 'interval_iats': [], 
+                'interval_inv_iat_logs': [], 
                 'interval_cumul': ['interval_cumul_norm'], 
                 'interval_cumul_norm': [], 
                 'interval_rates': [],
@@ -243,7 +244,7 @@ class DataProcessor:
             feature_dict['inv_iat_log_dirs'] = inv_iat_logs * dirs
 
         if self._is_enabled('interval_dirs_up', 'interval_dirs_down', 
-                            'interval_times', 'interval_iats', 
+                            'interval_times', 'interval_iats', 'interval_inv_iat_logs',
                             'interval_cumul', 'interval_rates'):
             interval_size = 0.02  # 20ms intervals
 
@@ -301,6 +302,14 @@ class DataProcessor:
                     elif i > 0:
                         interval_iats[i] = interval_iats[i-1] + interval_size
                 feature_dict['interval_iats'] = interval_iats
+
+            if self._is_enabled('interval_inv_iat_logs'):
+                inv_iat_logs_subs = torch.tensor_split(inv_iat_logs, split_points)
+                interval_inv_iat_logs = torch.zeros(num_intervals+1)
+                for i,tensor in enumerate(inv_iat_logs_subs):
+                    if tensor.numel() > 0:
+                        interval_inv_iat_logs[i] = tensor.mean()
+                feature_dict['interval_inv_iat_logs'] = interval_inv_iat_logs
 
             if self._is_enabled('interval_cumul'):
                 cumul_subs = torch.tensor_split(cumul, split_points)

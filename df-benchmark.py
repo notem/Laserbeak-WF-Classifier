@@ -122,8 +122,8 @@ def parse_args():
                         default = False,
                         help = "Use original DF optimizer and learning rate schedule configuration.")
     parser.add_argument('--features', 
-                        default=None, type=str, 
-                        help='Overwrite the features used in the config file.')
+                        default=None, type=str, nargs="+",
+                        help='Overwrite the features used in the config file. Multiple features can be provided.')
     parser.add_argument('--subpages', 
                         action='store_true', default=False, 
                         help="Treat website subpages as distinct labels.")
@@ -190,12 +190,20 @@ if __name__ == "__main__":
         with open(args.config, 'r') as fi:
             model_config = json.load(fi)
     else:
-        model_config = {'input_size': 10000,}
+        model_config = {'input_size': 10000, 
+                        'feature_list': [
+                                         "time_dirs",
+                                         "times_norm",
+                                         "cumul_norm",
+                                         "iat_dirs",
+                                         "inv_iat_log_dirs",
+                                         "running_rates"
+                                     ]}
 
     if args.input_size is not None:
         model_config['input_size'] = args.input_size
     if args.features is not None:
-        model_config['feature_list'] = [args.features]
+        model_config['feature_list'] = args.features
 
     print("==> Model configuration:")
     print(json.dumps(model_config, indent=4))
@@ -235,14 +243,14 @@ if __name__ == "__main__":
                                                  keep_tmp = args.keep_tmp,
                                                  subpage_as_labels = args.subpages,
                                                 )
-    print(classes)
     unm_class = classes-1 if include_unm else -1
 
     # # # # # #
     # define base metaformer model
     # # # # # #
     if args.run_cvt:
-        net = ConvolutionalVisionTransformer(in_chans=input_channels).to(device)
+        net = ConvolutionalVisionTransformer(in_chans = input_channels, 
+                                             num_classes = classes).to(device)
     else:
         net = DFNet(classes, input_channels, 
                     **model_config)
