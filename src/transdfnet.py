@@ -85,7 +85,6 @@ class TransformerBlock(nn.Module):
         return x
 
 
-
 class ConvBlock(nn.Module):
 
     def __init__(self, channels_in, channels, activation, 
@@ -94,6 +93,7 @@ class ConvBlock(nn.Module):
                 drop_p = 0., 
                 kernel_size = 8,
                 res_skip = False,
+                max_pool = None,
         ):
         super().__init__()
 
@@ -115,15 +115,30 @@ class ConvBlock(nn.Module):
 
         self.use_residual = res_skip
         if self.use_residual:
-            self.conv_proj = nn.Conv1d(channels_in, channels, kernel_size = 1,
+            if max_pool is not None:
+                kernel_size = max_pool.stride
+            else:
+                kernel_size = 1
+            self.conv_proj = nn.Conv1d(channels_in, channels, 
+                                       kernel_size = kernel_size, 
+                                       stride = max_pool.stride,
+                                       padding = kernel_size//2,
                                        groups = channels_in if depth_wise else 1)
+        self.max_pool = max_pool
 
 
     def forward(self, x):
         r = 0
         if self.use_residual:
             r = self.conv_proj(x)
-        x = r + self.cv_block(x)
+        x = self.cv_block(x)
+        if self.max_pool is not None:
+            x = self.max_pool(x)
+        # even sized pooling stride may result in residual projects being slightly off dimension
+        # adjust the size by clipping off extra values to fix this
+        if not isinstance(r, int):
+            r = r[...,:x.size(dim=2)]
+        x = r + x
         return x
 
 
@@ -193,6 +208,8 @@ class DFNet(nn.Module):
 
     def __build_model(self):
 
+        #if self.use_cluster_pooling:
+        #    self.ctm_blocks = nn.ModuleList([CTM(1/self.pool_stride_size, filter_num) for filter_num in self.filter_nums])
         self.max_pool = nn.MaxPool1d(self.pool_size, 
                                      stride = self.pool_stride_size, 
                                      padding = self.pool_size // 2)
@@ -209,6 +226,7 @@ class DFNet(nn.Module):
                                                   drop_p = self.conv_dropout_p,
                                                   kernel_size = self.kernel_size,
                                                   res_skip = False,
+                                                  max_pool = self.max_pool,
 			)
         stem_proj = nn.Conv1d(self.init_filters, self.proj_dim, kernel_size = 1)
 
@@ -233,6 +251,7 @@ class DFNet(nn.Module):
                                             drop_p = self.conv_dropout_p,
                                             kernel_size = self.kernel_size,
                                             res_skip = self.conv_skip,
+                                            max_pool = self.max_pool,
                                         )
                 block_list = [conv_block]
 
@@ -287,7 +306,7 @@ class DFNet(nn.Module):
                 x = block[-1](x)
             else:
                 x = block(x)
-            x = self.max_pool(x)
+            #x = self.max_pool(x)
             x = self.dropout(x)
         return x
 
