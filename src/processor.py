@@ -3,13 +3,14 @@ from torch.nn import functional as F
 
 
 
-def rate_estimator(iats):
+def rate_estimator(iats, sizes):
     """Simple/naive implementation of a running average traffic flow rate estimator
        It is entirely vectorized, so it is fast
     """
     times = torch.cumsum(iats, dim=0)
-    indices = torch.arange(1, iats.size(0) + 1)
-    flow_rate = torch.where(times != 0, indices / times, torch.ones_like(times))
+    #indices = torch.arange(1, iats.size(0) + 1)
+    sizes = torch.cumsum(sizes, dim=0)
+    flow_rate = torch.where(times != 0, sizes / times, torch.ones_like(times))
     return flow_rate
 
 
@@ -37,8 +38,10 @@ class DataProcessor:
     # list of valid processor options and any opts that depend on them
     DEPENS = {
                 'times': [],        # times & dirs are always available so no need to list depens
+                'sizes': [],
                 'dirs': [], 
                 'time_dirs': [],    # tik-tok style representation
+                'size_dirs': ['cumul'],
 
                 'burst_edges': [],  # a sparse representation that identifies whenever traffic changes direction
 
@@ -127,16 +130,25 @@ class DataProcessor:
 
         feature_dict = {}
 
-        times = torch.abs(x)
+        #times = torch.abs(x)
+        times = x.T[0]
         feature_dict['times'] = times
-        dirs = torch.sign(x)
+        sizes = x.T[1]
+        feature_dict['sizes'] = sizes
+        #dirs = torch.sign(x)
+        dirs = x.T[2]
         feature_dict['dirs'] = dirs
+
 
         upload = dirs > 0
         download = ~upload
 
         if self._is_enabled("time_dirs"):
             feature_dict['time_dirs'] = times * dirs
+
+        if self._is_enabled("size_dirs"):
+            size_dirs = sizes * dirs
+            feature_dict['size_dirs'] = size_dirs
 
         if self._is_enabled("times_norm"):
             # subtract mean and normalize by max
@@ -152,7 +164,7 @@ class DataProcessor:
 
         if self._is_enabled("cumul"):
             # Direction-based representations
-            cumul = torch.cumsum(dirs, dim=0)   # raw accumulation
+            cumul = torch.cumsum(size_dirs, dim=0)   # raw accumulation
             feature_dict['cumul'] = cumul
 
         if self._is_enabled("cumul_norm"):
@@ -173,7 +185,7 @@ class DataProcessor:
             feature_dict['iat_dirs'] = iat_dirs
 
         if self._is_enabled('running_rates'):
-            running_rates = rate_estimator(iats)
+            running_rates = rate_estimator(iats, sizes)
             feature_dict['running_rates'] = running_rates
 
         if self._is_enabled('running_rates_diff'):
@@ -193,7 +205,7 @@ class DataProcessor:
             feature_dict['down_iats'] = download_iats
 
         if self._is_enabled('up_rates'):
-            up_rates = rate_estimator(upload_iats)
+            up_rates = rate_estimator(upload_iats, sizes[upload])
             feature_dict['up_rates'] = up_rates
 
         if self._is_enabled('up_rates_sparse'):
@@ -208,7 +220,7 @@ class DataProcessor:
             #sparse_up_rate_decay[upload] = up_rates_decay
 
         if self._is_enabled('down_rates'):
-            down_rates = rate_estimator(download_iats)
+            down_rates = rate_estimator(download_iats, sizes[download])
             feature_dict['down_rates'] = down_rates
 
         if self._is_enabled('down_rates_sparse'):

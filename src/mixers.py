@@ -15,7 +15,6 @@ class MHSAttention(nn.Module):
     Vanilla self-attention from Transformer: https://arxiv.org/abs/1706.03762.
     Modified from timm.
     Added support for conv. projections (from CvT) and uses PyTorch 2.0 accelerated attention function
-    Added support for relative positional encodings: 
     """
     def __init__(self, dim, 
                  head_dim = None, num_heads = None, 
@@ -41,16 +40,16 @@ class MHSAttention(nn.Module):
 
         self.attention_dim = self.num_heads * self.head_dim
 
-        # Standard MHSA
-        # apply linear projections to produce the query, key, & value vectors
-        if not use_conv_proj:
-            self.qkv_proj = nn.Linear(dim, self.attention_dim * 3, bias = bias)
-            self.qkv = lambda x, with_cls_tok: self.qkv_proj(x).view(x.shape[0], -1, 3, self.num_heads, self.head_dim).permute(2, 0, 3, 1, 4).unbind(0)
+        self.q_linear_proj = nn.Linear(dim, self.attention_dim, bias = bias)
+        self.k_linear_proj = nn.Linear(dim, self.attention_dim, bias = bias)
+        self.v_linear_proj = nn.Linear(dim, self.attention_dim, bias = bias)
+
+        self.use_conv_proj = use_conv_proj
 
         # CvT MHSA - https://github.com/microsoft/CvT/blob/f851e681966390779b71380d2600b52360ff4fe1/lib/models/cls_cvt.py#L77
         # replaces linear projections with depth-wise convolutions
         # conv. strides > 1 can be used to reduce MHSA computations
-        else:
+        if use_conv_proj:
             kernel_size = kwargs.get('kernel_size', 3)
             stride = kwargs.get('stride', 1)
             dwconv = partial(nn.Conv1d,
@@ -61,30 +60,20 @@ class MHSAttention(nn.Module):
             self.q_conv_proj = dwconv(dim, dim)
             self.k_conv_proj = dwconv(dim, dim, stride = stride)
             self.v_conv_proj = dwconv(dim, dim, stride = stride)
-            self.q_linear_proj = nn.Linear(dim, self.attention_dim, bias = bias)
-            self.k_linear_proj = nn.Linear(dim, self.attention_dim, bias = bias)
-            self.v_linear_proj = nn.Linear(dim, self.attention_dim, bias = bias)
 
-            def conv_qkv(x, conv_proj, linear_proj, with_cls_tok=False):
-                """Apply depth-wise conv. layer and linear layers to reproject tokens into new space.
-                """
-                if with_cls_tok:    # don't include class token in conv. projection
-                    cls_token, x = torch.split(x, [1, x.shape[1]-1], dim=1)
+            #def conv_qkv(x, conv_proj, linear_proj):
+            #    """Apply depth-wise conv. layer and linear layers to reproject tokens into new space.
+            #    """
+            #    # dw conv. followed by linear projection as used by CvT
+            #    x = linear_proj(conv_proj(x.transpose(1, 2)).transpose(1, 2))
 
-                # dw conv. followed by linear projection as used by CvT
-                x = linear_proj(conv_proj(x.transpose(1, 2)).transpose(1, 2))
+            #    # reshape and permute
+            #    x = x.view(x.shape[0], -1, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
+            #    return x
 
-                if with_cls_tok:    # class token receives no linear projection in CvT?
-                    #cls_token = linear_proj(cls_token)
-                    x = torch.cat((cls_token, x), dim=1)
-
-                # reshape and permute
-                x = x.view(x.shape[0], -1, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
-                return x
-
-            self.qkv = lambda x, with_cls_tok: (conv_qkv(x, self.q_conv_proj, self.q_linear_proj, with_cls_tok), 
-                                                conv_qkv(x, self.k_conv_proj, self.k_linear_proj, with_cls_tok), 
-                                                conv_qkv(x, self.v_conv_proj, self.v_linear_proj, with_cls_tok))
+            #self.qkv = lambda x: (conv_qkv(x, self.q_conv_proj, self.q_linear_proj), 
+            #                                    conv_qkv(x, self.k_conv_proj, self.k_linear_proj), 
+            #                                    conv_qkv(x, self.v_conv_proj, self.v_linear_proj))
 
         self.attn_drop = nn.Dropout(attn_drop)
         self.attn_drop_p = attn_drop
@@ -93,14 +82,49 @@ class MHSAttention(nn.Module):
         self.proj_drop = nn.Dropout(proj_drop)
 
         self.head_drop = nn.Dropout2d(head_drop)
+
+
+    def qkv(self, x, skip_toks=0):
+
+        if not self.use_conv_proj:
+            q = self.q_linear_proj(x)
+            q = q.view(x.shape[0], -1, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
+            k = self.k_linear_proj(x)
+            k = k.view(x.shape[0], -1, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
+            v = self.v_linear_proj(x)
+            v = v.view(x.shape[0], -1, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
+
+        else:
+            x = x.transpose(1,2)  # transpose for conv. projections
+
+            # don't apply convolutional projection to sink tokens
+            if skip_toks > 0:
+                t, x = x[...,:skip_toks].transpose(1,2), x[...,skip_toks:]
+
+            # apply conv + linear projection to sequence toks
+            q = self.q_linear_proj(self.q_conv_proj(x).transpose(1,2))
+            q = q.view(x.shape[0], -1, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
+            k = self.k_linear_proj(self.k_conv_proj(x).transpose(1,2))
+            k = k.view(x.shape[0], -1, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
+            v = self.v_linear_proj(self.v_conv_proj(x).transpose(1,2))
+            v = v.view(x.shape[0], -1, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
+
+            # apply linear projections to sinks
+            if skip_toks > 0:
+                q = torch.cat((self.q_linear_proj(t).view(x.shape[0], -1, self.num_heads, self.head_dim).permute(0, 2, 1, 3), q), dim=2)
+                k = torch.cat((self.k_linear_proj(t).view(x.shape[0], -1, self.num_heads, self.head_dim).permute(0, 2, 1, 3), k), dim=2)
+                v = torch.cat((self.v_linear_proj(t).view(x.shape[0], -1, self.num_heads, self.head_dim).permute(0, 2, 1, 3), v), dim=2)
+
+        return q,k,v
+
+
         
     def forward(self, x, 
                 attn_mask = None, 
-                with_cls_tok = False, 
-                **kwargs):
+                skip_toks = 0):
 
         B, N, C = x.shape
-        q, k, v = self.qkv(x, with_cls_tok)
+        q, k, v = self.qkv(x, skip_toks)
 
         if attn_mask is not None:
             attn_mask = attn_mask.masked_fill(~attn_mask, -float('inf')) if attn_mask.dtype==torch.bool else attn_mask

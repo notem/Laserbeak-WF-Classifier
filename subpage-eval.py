@@ -19,7 +19,6 @@ import time
 import argparse
 
 from src.data import *
-#from src.deformdfnet import DFNet
 from src.transdfnet import DFNet
 from src.processor import DataProcessor
 from src.cls_cvt import ConvolutionalVisionTransformer
@@ -182,53 +181,6 @@ if __name__ == "__main__":
                                     reduction = 'mean', 
                                 )
 
-    def train_iter(i):
-        """
-        """
-        train_loss = 0.
-        train_acc = 0
-        n = 0
-
-        bar_desc = f"Train"
-        with tqdm(trainloader, desc = bar_desc, dynamic_ncols = True) as pbar:
-            for batch_idx, (inputs, targets, sample_sizes) in enumerate(pbar):
-
-                inputs, targets = inputs.to(device), targets.to(device)
-                if inputs.size(0) <= 1: continue
-
-                # # # # # #
-                # DF prediction
-                if args.run_cvt:
-                    cls_pred = net(inputs)
-                    loss = criterion(cls_pred, targets)
-                else:
-                    cls_pred, feats = net(inputs, 
-                                          sample_sizes = sample_sizes, 
-                                          return_feats = True)
-
-                    loss = criterion(cls_pred, targets)
-
-                train_loss += loss.item()
-
-                loss /= accum   # normalize to full batch size
-
-                _, y_pred = torch.max(cls_pred, 1)
-                train_acc += torch.sum(y_pred == targets).item()
-                n += len(targets)
-
-                loss.backward()
-
-
-                pbar.set_postfix({
-                                  'acc': train_acc/n,
-                                  'loss': train_loss/(batch_idx+1),
-                                  })
-                pbar.set_description(bar_desc)
-
-        train_loss /= batch_idx + 1
-        return train_loss, train_acc/n
-
-
     def test_iter(i):
         """
         """
@@ -244,10 +196,7 @@ if __name__ == "__main__":
 
                 # # # # # #
                 # DF prediction
-                if args.run_cvt:
-                    cls_pred = net(inputs)
-                else:
-                    cls_pred = net(inputs, sample_sizes = sample_sizes)
+                cls_pred = net(inputs)
                 loss = criterion(cls_pred, targets)
 
                 test_loss += loss.item()
@@ -297,8 +246,6 @@ if __name__ == "__main__":
         net.eval()
 
         epoch = -1
-        #train_loss, train_acc = train_iter(epoch)
-        #print(f'[{epoch}] tr. loss ({train_loss:0.3f}), tr. acc ({train_acc:0.3f})')
         test_loss, test_acc = test_iter(epoch)
         print(f'[{epoch}] te. loss ({test_loss:0.3f}), te. acc ({test_acc:0.3f})')
     else:

@@ -1,10 +1,4 @@
-"""ResNet in PyTorch.
-
-For Pre-activation ResNet, see 'preact_resnet.py'.
-
-Reference:
-[1] Kaiming He, Xiangyu Zhang, Shaoqing Ren, Jian Sun
-    Deep Residual Learning for Image Recognition. arXiv:1512.03385
+"""
 """
 import torch
 import torch.nn as nn
@@ -14,23 +8,23 @@ from src.layers import *
 from src.mixers import *
 from functools import partial
 from timm.layers import trunc_normal_, DropPath
+from collections.abc import Iterable
 
 
 class TransformerBlock(nn.Module):
     """
     Implementation of one TransFormer block.
-    Code modified from MetaFormer: [link here?]
     """
     def __init__(self, dim, 
                     token_mixer = nn.Identity, 
                     mlp = Mlp,
                     norm_layer = nn.LayerNorm,
                     drop_path = 0.,
-                    res_scale_init_value = None,
                     feedforward_style = 'mlp',
                     feedforward_drop = 0.0,
                     feedforward_act = nn.GELU,
                     feedforward_ratio = 4,
+                    skip_toks=0,
                     **kwargs,
                  ):
         super().__init__()
@@ -56,29 +50,28 @@ class TransformerBlock(nn.Module):
 
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
 
-        self.res_scale1 = Scale(dim=dim, init_value=res_scale_init_value) \
-            if res_scale_init_value else nn.Identity()
-
         self.norm2 = norm_layer(dim)
         self.mlp = mlp(dim=dim)
 
-        self.res_scale2 = Scale(dim=dim, init_value=res_scale_init_value) \
-            if res_scale_init_value else nn.Identity()
+        self.skip_toks = skip_toks
         
-    def forward(self, x, pad_mask=None, **kwargs):
+    def forward(self, x, pad_mask=None):
+
+        # resize the padding mask to current stage dim. if used
         if pad_mask is not None:
             adju_pad_mask = F.interpolate(pad_mask, size=x.size(-1), mode='linear')
             attn_mask = (adju_pad_mask < 1)
         else:
             attn_mask = None
 
+        # transformer operates on sequence dim. first
         x = x.permute(0,2,1)
-        x = self.res_scale1(x) + \
-                self.drop_path(
-                    self.token_mixer(self.norm1(x), attn_mask=attn_mask)
+        x = x + self.drop_path(
+                    self.token_mixer(self.norm1(x), 
+                        attn_mask = attn_mask, 
+                        skip_toks = self.skip_toks)
             )
-        x = self.res_scale2(x) + \
-                self.drop_path(
+        x = x + self.drop_path(
                     self.mlp(self.norm2(x))
             )
         x = x.permute(0,2,1)
@@ -94,12 +87,12 @@ class ConvBlock(nn.Module):
                 kernel_size = 8,
                 res_skip = False,
                 max_pool = None,
+                skip_toks=0,
         ):
         super().__init__()
 
         conv = partial(nn.Conv1d, 
                     kernel_size = kernel_size, 
-                    #padding = kernel_size // 2, 
                     padding = 'same',
                     groups = channels_in if depth_wise else 1,
                 )
@@ -125,10 +118,15 @@ class ConvBlock(nn.Module):
                                        padding = kernel_size//2,
                                        groups = channels_in if depth_wise else 1)
         self.max_pool = max_pool
+        self.skip_toks = skip_toks
+        if self.skip_toks > 0:
+            self.sink_proj = nn.Linear(channels_in, channels)
 
 
     def forward(self, x):
         r = 0
+        if self.skip_toks > 0:
+            t, x = x[...,:self.skip_toks], x[...,self.skip_toks:]
         if self.use_residual:
             r = self.conv_proj(x)
         x = self.cv_block(x)
@@ -139,10 +137,13 @@ class ConvBlock(nn.Module):
         if not isinstance(r, int):
             r = r[...,:x.size(dim=2)]
         x = r + x
+        if self.skip_toks > 0:
+            x = torch.concat((self.sink_proj(t.transpose(1,2)).transpose(1,2),x), dim=2)
         return x
 
 
 class DFNet(nn.Module):
+
     def __init__(self, num_classes, input_channels, 
                        channel_up_factor = 32, 
                        filter_grow_factor = 2,
@@ -163,33 +164,55 @@ class DFNet(nn.Module):
                        conv_skip = False,
                        use_gelu = False,
                        stem_downproj = 1.,
+                       register_tokens = 0,
+                       flatten_feats = True,
                     **kwargs):
         super(DFNet, self).__init__()
 
-        self.input_size = input_size
-        self.input_channels = input_channels
-        self.num_classes = num_classes
-        self.kernel_size = kernel_size
-        self.pool_stride_size = pool_stride_size
-        self.pool_size = pool_size
+        # # # #
+        # Convolutional Block related parameters
+        # # # #
 
-        self.conv_dropout_p = conv_dropout_p
-        self.block_dropout_p = block_dropout_p
-        self.mlp_dropout_p = mlp_dropout_p
-        self.filter_grow_factor = filter_grow_factor
-        self.conv_expand_factor = conv_expand_factor
-        self.conv_skip = conv_skip
-        self.depth_wise = depth_wise
-        self.use_gelu = use_gelu       # replace default DF activations w/ GELU
+        self.input_channels = input_channels
+        self.kernel_size = kernel_size                # kernel width
+        self.pool_stride_size = pool_stride_size      # pooling stride, determines downsampling factor
+        self.pool_size = pool_size                    # pooling width
+        self.flatten_feats = flatten_feats
+
+        self.block_dropout_p = block_dropout_p        # dropout between stages
+        self.conv_dropout_p = conv_dropout_p          # dropout between conv. layers in block
+
+        self.filter_grow_factor = filter_grow_factor  # filter growth between stages
+        self.conv_expand_factor = conv_expand_factor  # filter expansion inside conv. block
+        self.conv_skip = conv_skip      # enable skip connections
+        self.depth_wise = depth_wise    # enable conv. groups in stem block
+        self.use_gelu = use_gelu        # replace default DF activations w/ GELU
 
         # filter count for first stage
         self.stage_count = stage_count
-        self.init_filters = int(input_channels * channel_up_factor)
-        # filter counts for later stages
-        self.proj_dim = int(stem_downproj * self.init_filters)
-        self.filter_nums = [int(self.proj_dim * (self.filter_grow_factor**i)) for i in range(self.stage_count)]
+        self.init_filters = int(input_channels * channel_up_factor)  # dim. size of stem block output
 
-        self.mlp_hidden_dim = mlp_hidden_dim
+        # calculate filter counts for later stages
+        self.proj_dim = int(stem_downproj * self.init_filters)       # dim. size to project to after stem
+        self.filter_nums = [int(self.proj_dim * (self.filter_grow_factor**i))
+                                for i in range(self.stage_count)]
+
+        # # # #
+        # Classification MLP related parameters
+        # # # #
+
+        self.input_size = input_size
+        self.num_classes = num_classes
+
+        self.mlp_hidden_dim = mlp_hidden_dim if isinstance(mlp_hidden_dim, Iterable) else [mlp_hidden_dim]*2 
+        self.mlp_dropout_p = mlp_dropout_p if isinstance(mlp_dropout_p, Iterable) else [mlp_dropout_p]*len(self.mlp_hidden_dim)
+
+        self.stage_sizes = self.__stage_size(self.input_size)
+        self.fmap_size = self.stage_sizes[-1]
+
+        # # # #
+        # Transformer Block related parameters
+        # # # #
 
         # mixing op for transformer blocks
         mhsa_mixer = partial(MHSAttention,)
@@ -198,24 +221,30 @@ class DFNet(nn.Module):
                     partial(mhsa_mixer, **mhsa_kwargs[i])
                     for i in range(stage_count-1)
                  ]
+        # number of transformer blocks per stage
         self.trans_depths = trans_depths if isinstance(trans_depths, (list, tuple)) else [trans_depths]*(stage_count-1)
 
-        self.stage_sizes = self.__stage_size(self.input_size)
-        self.fmap_size = self.stage_sizes[-1]
+        # "global" tokens exclusively used by transformer blocks 
+        self.register_tokens = register_tokens
 
+        # construct the model using the selected params
         self.__build_model()
 
 
     def __build_model(self):
-
-        #if self.use_cluster_pooling:
-        #    self.ctm_blocks = nn.ModuleList([CTM(1/self.pool_stride_size, filter_num) for filter_num in self.filter_nums])
+        """Construct the model layers
+        """
+        # pooling layer used to reduction sequence length in each stage
         self.max_pool = nn.MaxPool1d(self.pool_size, 
                                      stride = self.pool_stride_size, 
                                      padding = self.pool_size // 2)
-        self.dropout = nn.Dropout(p = self.block_dropout_p)
+        # dropout applied to the output of each stage
+        self.stage_dropout = nn.Dropout(p = self.block_dropout_p)
 
-
+        # initialization of sink tokens (if enabled)
+        if self.register_tokens > 0:
+            toks = nn.init.xavier_uniform_(torch.empty(self.filter_nums[0], self.register_tokens))
+            self.sinks = nn.Parameter(toks)
 
         # blocks for each stage of the classifier
         # begin with initial conv. block
@@ -228,16 +257,16 @@ class DFNet(nn.Module):
                                                   res_skip = False,
                                                   max_pool = self.max_pool,
 			)
-        stem_proj = nn.Conv1d(self.init_filters, self.proj_dim, kernel_size = 1)
+        if self.proj_dim != self.init_filters:
+            stem_proj = nn.Conv1d(self.init_filters, self.proj_dim, kernel_size = 1)
+            stem = nn.Sequential(stem_conv, stem_proj)
+        else:
+            stem = stem_conv
 
-        stem = nn.Sequential(stem_conv,
-                             stem_proj if self.proj_dim != self.init_filters else nn.Identity(),
-               )
-
+        # model structure is organized as a list of stage blocks
         self.blocks = nn.ModuleList([stem])
 
         # build stages
-        self.pegs = nn.ModuleList([])
         if self.stage_count > 1:
             for i in range(1, self.stage_count):
                 cur_dim = self.filter_nums[i-1]
@@ -252,6 +281,7 @@ class DFNet(nn.Module):
                                             kernel_size = self.kernel_size,
                                             res_skip = self.conv_skip,
                                             max_pool = self.max_pool,
+                                            skip_toks = self.register_tokens,
                                         )
                 block_list = [conv_block]
 
@@ -261,7 +291,7 @@ class DFNet(nn.Module):
                     stage_mixer = self.mixers[i - 1]
                     stage_block = partial(TransformerBlock, dim = cur_dim, 
                                                 token_mixer = stage_mixer, 
-                                                res_scale_init_value = 1,
+                                                skip_toks = self.register_tokens,
                                          )
                     block_list = [stage_block() for _ in range(depth)] + block_list
 
@@ -269,21 +299,30 @@ class DFNet(nn.Module):
                 block = nn.ModuleList(block_list)
                 self.blocks.append(block)
 
-        # calculate flattened conv output size
-        self.fc_in_features = self.fmap_size * self.filter_nums[-1]  # flattened dim = fmap_size * fmap_count
+        # calculate total feature size after flattening
+        self.fc_in_features = (self.register_tokens + self.fmap_size) * self.filter_nums[-1] if self.flatten_feats else self.filter_nums[-1]*2
 
-        self.fc_size = self.mlp_hidden_dim
-        self.fc = nn.Sequential(
-            nn.Linear(self.fc_in_features, self.fc_size),
-            nn.BatchNorm1d(self.fc_size),
-            nn.GELU() if self.use_gelu else nn.ReLU(),
-            nn.Dropout(self.mlp_dropout_p[0]),
-            nn.Linear(self.fc_size, self.fc_size),
-            nn.BatchNorm1d(self.fc_size),
-            nn.GELU() if self.use_gelu else nn.ReLU(),
-            nn.Dropout(self.mlp_dropout_p[1])
-        )
-        self.fc_out_fcount = self.fc_size
+        # build classification layers
+        #self.fc_size = self.mlp_hidden_dim
+        self.fc_layers = [
+                    nn.Linear(self.fc_in_features, self.mlp_hidden_dim[0]),
+                    nn.BatchNorm1d(self.mlp_hidden_dim[0]),
+                    nn.GELU() if self.use_gelu else nn.ReLU(),
+                    nn.Dropout(self.mlp_dropout_p[0]),
+                ]
+        if len(self.mlp_hidden_dim) > 1:
+            for i in range(1,len(self.mlp_hidden_dim)):
+                fc_size_in = self.mlp_hidden_dim[i-1]
+                fc_size_out = self.mlp_hidden_dim[i]
+                self.fc_layers.extend([
+                        nn.Linear(fc_size_in, fc_size_out),
+                        nn.BatchNorm1d(fc_size_out),
+                        nn.GELU() if self.use_gelu else nn.ReLU(),
+                        nn.Dropout(self.mlp_dropout_p[i])
+                    ])
+
+        self.fc = nn.Sequential(*self.fc_layers)
+        self.fc_out_fcount = self.mlp_hidden_dim[-1]
 
         self.pred = nn.Sequential(
             nn.Linear(self.fc_out_fcount, self.num_classes),
@@ -293,27 +332,52 @@ class DFNet(nn.Module):
 
 
     def __stage_size(self, input_size):
+        """Calculate the sequence size after stages within the model (as a function of input_size)
+        """
         fmap_size = [input_size]
         for i in range(len(self.filter_nums)):
             fmap_size.append(int((fmap_size[-1] - self.pool_size + 2*(self.pool_size//2)) / self.pool_stride_size) + 1)
         return fmap_size[1:]
 
-    def features(self, x, pad_mask):
-        for i,block in enumerate(self.blocks):
-            if type(block) is nn.ModuleList:
-                for j in range(len(block)-1):
-                    x = block[j](x, pad_mask)
-                x = block[-1](x)
-            else:
-                x = block(x)
-            #x = self.max_pool(x)
-            x = self.dropout(x)
+    def features(self, x, pad_mask=None):
+        """forward x through the primary 'feature extraction' layers consisting 
+            of multiple stages of convolutional and transformer blocks.
+        """
+        # apply stem block
+        x = self.blocks[0](x)
+        #assert not torch.any(x.isnan())
+        #assert not torch.any(x.isinf())
+
+        x = self.stage_dropout(x)
+
+        # if sink tokens are enabled, append now
+        if self.register_tokens > 0:
+            x = torch.cat((self.sinks.unsqueeze(0).expand(x.shape[0],-1,-1), x), dim=2)
+
+        # apply remaining stages
+        for i,block in enumerate(self.blocks[1:]):
+            # apply stage transformer blocks
+            for j in range(len(block)-1):
+                x = block[j](x, pad_mask)
+            # apply stage conv. block
+            x = block[-1](x)
+            x = self.stage_dropout(x)
+
+        #if self.register_tokens > 0:
+        #    x = x[:,:,self.register_tokens:]
+
         return x
 
     def forward(self, x, 
             sample_sizes = None,
             return_feats = False,
             *args, **kwargs):
+        """forward input features through the model
+        Does the following:
+        - fix input to correct dimension and size
+        - run input through feature layers
+        - run feature output through classification layers
+        """
 
         # add channel dim if necessary
         if len(x.shape) < 3:
@@ -326,22 +390,31 @@ class DFNet(nn.Module):
         elif size_dif < 0:
             x = F.pad(x, (0,abs(size_dif)))
 
+        # padding can be ignored during self-attention if configured with pad_masks
+        # note: padding-aware self-attention does not seem to be improve performance, but reduces computation efficiency
         pad_masks = None
-        #if sample_sizes is not None:
-        #    pad_masks = torch.stack([torch.cat((torch.zeros(min(s, self.input_size)), torch.ones(max(self.input_size-s, 0)))) for s in sample_sizes])
-        #    pad_masks = pad_masks.to(x.get_device())
-        #    pad_masks = pad_masks.unsqueeze(1)
+        if sample_sizes is not None:
+            pad_masks = torch.stack([torch.cat((torch.zeros(min(s, self.input_size)), 
+                                                torch.ones(max(self.input_size-s, 0)))) for s in sample_sizes])
+            pad_masks = pad_masks.to(x.get_device())
+            pad_masks = pad_masks.unsqueeze(1)
 
         # feed through conv. blocks and flatten
         x = self.features(x, pad_masks)
 
         # feed flattened feature maps to mlp
-        x = x.flatten(start_dim=1) # dim = 1, don't flatten batch
+        if self.flatten_feats:
+            x = x.flatten(start_dim=1) # dim = 1, don't flatten batch
+        else:
+            #x = torch.mean(x, 2).flatten(start_dim=1)
+            #x = torch.max(x, 2).values.flatten(start_dim=1)
+            x = torch.cat((torch.max(x, 2).values.flatten(start_dim=1), 
+                            torch.mean(x, 2).flatten(start_dim=1)), dim=1)
         g = self.fc(x)
 
         # produce final predictions from mlp
         y_pred = self.pred(g)
-        if return_feats:
+        if return_feats:      # return logits if requested
             return y_pred, g
         return y_pred
 

@@ -13,10 +13,143 @@ from collections import defaultdict
 from tqdm import tqdm
 import shutil
 import random
+import pickle
 
 
 MIN_LENGTH_DEFAULT = 1
 MAX_LENGTH_DEFAULT = 12000
+
+
+class VCFDataset(data.Dataset):
+    """
+    Flexible Dataset object that can be applied to load any of the subpage-based WF datasets
+    """
+    def __init__(self, root, 
+                *args, 
+                mon_tr_count = 130,
+                mon_te_count = 20,
+                train = True, 
+                per_batch_transforms = None, 
+                on_load_transforms = None,
+                tmp_directory = './tmp',
+                tmp_subdir = None,
+                keep_tmp = False,
+                **kwargs,
+            ):
+
+        te_idx = np.arange(mon_te_count)
+        tr_idx = np.arange(mon_te_count, mon_te_count + mon_tr_count)
+
+        mon_suffix_t = f'{mon_te_count}-{mon_tr_count}'
+
+        def prep(set_idx):
+            with open(os.path.join(root, 'vcf-google', 'data150.pkl'), 'rb') as fi:
+                raw_data = pickle.load(fi)
+            keys = sorted(list(raw_data.keys()))
+
+            dataset = dict()
+            labels = dict()
+            ids = []
+
+            classes = []
+            for i,key in enumerate(keys):
+                if classes:
+                    classes.append(classes[-1]+1)
+                else:
+                    classes.append(0)
+                samples = raw_data[key][set_idx]
+                for j,x in enumerate(samples): 
+
+                    ID = f'{i}-{j}'
+                    ids.append(ID)
+
+                    # remove padding from sample
+                    z = np.where(x.T[0] == 0.)[0]
+                    if z.size > 0:
+                        x = x[:z[0]]
+
+                    sizes = x.T[0]
+                    times = np.cumsum(x.T[1])
+                    dirs = x.T[2]
+                    x = np.array([times, sizes, dirs]).T
+
+                    dataset[ID] = x
+                    labels[ID] = classes[-1]
+
+            return dataset, labels, ids, classes
+
+
+        if train:
+            dataset, labels, ids, classes = prep(tr_idx)
+
+        else:
+            dataset, labels, ids, classes = prep(te_idx)
+
+        self.classes = classes
+        self.ids = ids
+        self.dataset = dataset
+        self.labels = labels
+        self.transform = per_batch_transforms
+        self.max_length = 3000
+
+        # pre-apply transformations 
+        self.keep_tmp = keep_tmp
+        self.tmp_data = None
+        if on_load_transforms:
+            # setup tmp directory and filename map
+            if tmp_directory is not None:
+                if tmp_subdir is not None:
+                    self.tmp_dir = os.path.join(tmp_directory, tmp_subdir, 'tr' if train else 'te')
+                else:
+                    self.tmp_dir = f'{tmp_directory}/tmp{random.randint(0, 1000)}'
+                if not os.path.exists(self.tmp_dir):
+                    try:
+                        os.makedirs(self.tmp_dir)
+                    except:
+                        pass
+                self.tmp_data = dict()
+
+            # do processing
+            for ID in tqdm(self.ids, desc="Processing...", dynamic_ncols=True):
+                x = self.dataset[ID]  # get sample by ID
+
+                # check if processed sample already exists in tmp
+                if self.tmp_data is not None:
+                    filename = f'{self.tmp_dir}/{ID}.pt'
+                    self.tmp_data[ID] = filename
+                    if os.path.exists(filename):
+                        continue
+
+                # apply processing to sample
+                x = on_load_transforms(x)
+
+                # store transforms to disk 
+                if self.tmp_data is not None:
+                    torch.save(x, filename)
+                # store in memory
+                else:
+                    self.dataset[ID] = x
+ 
+    def __len__(self):
+        return len(self.ids)
+ 
+    def __getitem__(self, index):
+        ID = self.ids[index]
+        X = self.dataset[ID] if self.tmp_data is None else torch.load(self.tmp_data[ID])
+        if self.max_length:
+            X = X[:self.max_length]
+        if self.transform:
+            return self.transform(X), self.labels[ID]
+        return X, self.labels[ID]
+
+    def __del__(self):
+        if not self.keep_tmp:
+            try:
+                if self.tmp_data is not None:
+                    shutil.rmtree(self.tmp_dir)
+            except:
+                print(f">>> Failed to clear temp directory \'{self.tmp_dir}\'!!")
+
 
 
 class GenericWFDataset(data.Dataset):
@@ -31,7 +164,6 @@ class GenericWFDataset(data.Dataset):
                 mon_tr_count, unm_tr_count, 
                 mon_te_count, unm_te_count, 
                 *args, 
-                unm_tr_start_idx = None,
                 train = True, 
                 class_selector = None,
                 class_divisor = 1,
@@ -43,14 +175,31 @@ class GenericWFDataset(data.Dataset):
                 tmp_directory = './tmp',
                 tmp_subdir = None,
                 keep_tmp = False,
+                te_chunk_no = 0,
                 **kwargs,
             ):
 
-        te_idx = np.arange(mon_te_count)
-        te_unm_idx = np.arange(unm_te_count)
-        tr_idx = np.arange(mon_te_count, mon_te_count + mon_tr_count)
-        unm_start_idx = unm_tr_start_idx if unm_tr_start_idx else unm_te_count + unm_tr_count
-        tr_unm_idx = np.arange(unm_start_idx, unm_start_idx + unm_tr_count)
+        te_idx_range = (te_chunk_no*mon_te_count, (te_chunk_no+1)*mon_te_count)
+        te_unm_idx_range = (te_chunk_no*unm_te_count, (te_chunk_no+1)*mon_te_count)
+
+        te_idx = np.arange(*te_idx_range)
+        te_unm_idx = np.arange(*te_idx_range)
+
+        if te_chunk_no > 0:
+            tr_idx_1 = np.arange(0, te_idx_range[0])
+            remaining = mon_tr_count - te_idx_range[0]
+            tr_idx_2 = np.arange(te_idx_range[1], te_idx_range[1] + remaining)
+            tr_idx = np.concatenate((tr_idx_1, tr_idx_2))
+
+            tr_unm_idx_1 = np.arange(0, te_unm_idx_range[0])
+            remaining = unm_tr_count - te_unm_idx_range[0]
+            tr_unm_idx_2 = np.arange(te_unm_idx_range[1], te_unm_idx_range[1] + remaining)
+            tr_unm_idx = np.concatenate((tr_unm_idx_1, tr_unm_idx_2))
+        else:
+            tr_idx = np.arange(mon_te_count, mon_te_count + mon_tr_count)
+            #unm_start_idx = unm_tr_start_idx if unm_tr_start_idx else unm_te_count + unm_tr_count
+            unm_start_idx = unm_te_count + unm_tr_count
+            tr_unm_idx = np.arange(unm_start_idx, unm_start_idx + unm_tr_count)
 
         mon_suffix_t = f'{mon_te_count}-{mon_tr_count}'
         unm_suffix_t = f'{unm_te_count//1000}k-{unm_tr_count//1000}k'
@@ -88,6 +237,7 @@ class GenericWFDataset(data.Dataset):
         self.labels = labels
         self.transform = per_batch_transforms
         self.max_length = max_length
+        self.keep_tmp = False
 
         # pre-apply transformations 
         self.tmp_data = None
@@ -115,6 +265,7 @@ class GenericWFDataset(data.Dataset):
                     filename = f'{self.tmp_dir}/{ID}.pt'
                     self.tmp_data[ID] = filename
                     if os.path.exists(filename):
+                        del x
                         continue
 
                 # apply processing to sample
@@ -123,9 +274,14 @@ class GenericWFDataset(data.Dataset):
                 # store transforms to disk 
                 if self.tmp_data is not None:
                     torch.save(x, filename)
+                    del x
                 # store in memory
                 else:
                     self.dataset[ID] = x
+
+            if self.tmp_data is not None:
+                del self.dataset
+                self.dataset = dict()
  
     def __len__(self):
         return len(self.ids)
@@ -392,8 +548,8 @@ def load_mon(data_dir, mon_raw_data_name, sample_idx,
             i = 0
             while i < len(multisample) and i < multisample_count:
                 sample = np.around(multisample[i], decimals=2)
+                sample = np.array([np.abs(sample), np.ones(len(sample)), np.sign(sample)]).T
                 i += 1
-                #sample = np.array([np.abs(sample), np.ones(len(sample))*512, np.sign(sample)]).T
                 if len(sample) < min_length: continue
                 all_X.append(sample)
                 all_y.append(key)
@@ -432,7 +588,7 @@ def load_unm(data_dir, raw_data_name, sample_idx,
         j = 0
         while j < len(multisample) and j < multisample_count:
             sample = np.around(multisample[j], decimals=2)
-            #sample = np.array([np.abs(sample), np.ones(len(sample))*512, np.sign(sample)]).T
+            sample = np.array([np.abs(sample), np.ones(len(sample)), np.sign(sample)]).T
             j += 1
             if len(sample) < min_length: continue
             all_X_umn.append(sample)
@@ -500,7 +656,7 @@ DATASET_CHOICES = ['be', 'be-front', 'be-interspace', 'be-regulator', 'be-ts2', 
                    'amazon', 'amazon-300k', 'amazon-front', 'amazon-front-300k', 'amazon-interspace', 'amazon-interspace-300k',
                    'webmd', 'webmd-300k', 'webmd-front', 'webmd-front-300k', 'webmd-interspace', 'webmd-interspace-300k',
                    'gong', 'gong-surakav4', 'gong-surakav6', 'gong-front', 'gong-tamaraw',
-                   'gong-50k', 'gong-surakav4-50k', 'gong-surakav6-50k', 'gong-front-50k', 'gong-tamaraw-50k',
+                   'gong-50k', 'gong-surakav4-50k', 'gong-surakav6-50k', 'gong-front-50k', 'gong-tamaraw-50k', 'vcf-google'
                    ]
 
 
@@ -508,8 +664,9 @@ def load_data(dataset,
         batch_size = 32, 
         tr_transforms = (), te_transforms = (),     # apply on-load
         tr_augments = (), te_augments = (),         # apply per-batch
+        val_perc = 0.,
         root = './data', 
-        workers = 4,
+        workers = 0,
         collate_return_sample_sizes = True,
         **kwargs,
     ):
@@ -728,10 +885,18 @@ def load_data(dataset,
                             **kwargs,
                 )
 
+    elif dataset == "vcf-google":
+        data_obj = partial(VCFDataset, root)
+
 
     trainset = data_obj(train=True, **tr_transforms) 
     testset = data_obj(train=False, **te_transforms) 
     classes = len(testset.classes)
+
+    if val_perc > 0.:
+        trainset, valset = data.random_split(trainset, [1-val_perc, val_perc])
+    else:
+        valset = None
 
     # prepare dataloaders without sampler
     trainloader = torch.utils.data.DataLoader(
@@ -739,19 +904,32 @@ def load_data(dataset,
         collate_fn = collate_and_pad,
         batch_size = batch_size,
         shuffle = True,
-        pin_memory = True,
+        pin_memory = False,
     )
+    valloader = None
+    if valset is not None:
+        valloader = torch.utils.data.DataLoader(
+            valset, num_workers = workers, 
+            collate_fn = collate_and_pad,
+            batch_size = batch_size,
+            shuffle = True,
+            pin_memory = False,
+        )
     testloader = None
     if testset is not None:
         testloader = torch.utils.data.DataLoader(
             testset, num_workers = workers, 
             collate_fn = collate_and_pad,
             batch_size = batch_size,
-            pin_memory = True,
+            pin_memory = False,
         )
 
 
-    print(f'Train: {len(trainset)} samples across {len(trainloader)} batches')
-    print(f'Test: {len(testset)} samples across {len(testloader)} batches')
 
-    return trainloader, testloader, classes
+    print(f'Train: {len(trainset)} samples across {len(trainloader)} batches')
+    if valset is not None:
+        print(f'Val: {len(valset)} samples across {len(valloader)} batches')
+    if testset is not None:
+        print(f'Test: {len(testset)} samples across {len(testloader)} batches')
+
+    return trainloader, valloader, testloader, classes

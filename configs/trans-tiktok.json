@@ -1,0 +1,16 @@
+{
+    "input_size": 7000,
+    "trans_depths": 2,
+    "mhsa_kwargs": {
+        "head_dim": 10,
+        "use_conv_proj": true,
+        "kernel_size": 7,
+        "stride": 4,
+        "feedforward_style": "mlp",
+        "feedforward_ratio": 3,
+        "feedforward_drop": 0.0
+    },
+    "feature_list": [
+        "time_dirs"
+    ]
+}

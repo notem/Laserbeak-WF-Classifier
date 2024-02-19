@@ -167,14 +167,16 @@ if __name__ == "__main__":
     # define base metaformer model
     # # # # # #
     if args.run_cvt:
-        net = ConvolutionalVisionTransformer(in_chans=input_channels).to(device)
+        net = ConvolutionalVisionTransformer(input_size = model_config['input_size'], 
+                                             in_chans = input_channels, 
+                                             num_classes = classes).to(device)
     else:
         net = DFNet(classes, input_channels, 
                     **model_config)
         net = net.to(device)
-        if resumed:
-            net_state_dict = resumed['model']
-            net.load_state_dict(net_state_dict)
+    if resumed:
+        net_state_dict = resumed['model']
+        net.load_state_dict(net_state_dict)
         
     criterion = nn.CrossEntropyLoss(
                                     reduction = 'mean', 
@@ -201,7 +203,6 @@ if __name__ == "__main__":
                     loss = criterion(cls_pred, targets)
                 else:
                     cls_pred, feats = net(inputs, 
-                                          sample_sizes = sample_sizes, 
                                           return_feats = True)
 
                     loss = criterion(cls_pred, targets)
@@ -236,7 +237,7 @@ if __name__ == "__main__":
         thresholds = np.concatenate((np.linspace(0.0, .9, num=10, endpoint=False), 
                                      np.linspace(0.9, 1.0, num=90, endpoint=False)))
         res = np.zeros((len(thresholds), 4))
-        with tqdm(testloader, desc=f"Test", dynamic_ncols=True) as pbar:
+        with tqdm(testloader, desc=f"Test", bar_format='{l_bar}{bar:10}{r_bar}{bar:-10b}', dynamic_ncols=True) as pbar:
             for batch_idx, (inputs, targets, sample_sizes) in enumerate(pbar):
 
                 inputs, targets = inputs.to(device), targets.to(device)
@@ -244,10 +245,7 @@ if __name__ == "__main__":
 
                 # # # # # #
                 # DF prediction
-                if args.run_cvt:
-                    cls_pred = net(inputs)
-                else:
-                    cls_pred = net(inputs, sample_sizes = sample_sizes)
+                cls_pred = net(inputs)
                 loss = criterion(cls_pred, targets)
 
                 test_loss += loss.item()

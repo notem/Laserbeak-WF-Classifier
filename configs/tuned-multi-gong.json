@@ -12,19 +12,8 @@
     "kernel_size": 7,
     "pool_stride_size": 4,
     "pool_size": 7,
-    "block_dropout_p": 0.1,
-    "register_tokens": 0,
-    "mlp_hidden_dim": 1024,
-    "trans_depths": 2,
-    "mhsa_kwargs": {
-        "head_dim": 10,
-        "use_conv_proj": true,
-        "kernel_size": 7,
-        "stride": 4,
-        "feedforward_style": "mlp",
-        "feedforward_ratio": 3,
-        "feedforward_drop": 0.0
-    },
+    "block_dropout_p": 0.0,
+    "mlp_hidden_dim": 512,
     "feature_list": [
         "time_dirs",
         "times_norm",
