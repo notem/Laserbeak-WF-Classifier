@@ -244,14 +244,12 @@ if __name__ == "__main__":
         with open(args.config, 'r') as fi:
             model_config = json.load(fi)
     else:
-        model_config = {'input_size': 10000, 
+        model_config = {'input_size': 5000, 
                         'feature_list': [
-                                         "time_dirs",
-                                         "times_norm",
+                                         "dirs",
                                          "cumul_norm",
-                                         "iat_dirs",
-                                         "inv_iat_log_dirs",
-                                         "running_rates"
+                                         "interval_inv_iat_logs",
+                                         "times",
                                      ]}
 
     if args.input_size is not None:

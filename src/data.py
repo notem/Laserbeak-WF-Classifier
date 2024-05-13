@@ -180,10 +180,10 @@ class GenericWFDataset(data.Dataset):
             ):
 
         te_idx_range = (te_chunk_no*mon_te_count, (te_chunk_no+1)*mon_te_count)
-        te_unm_idx_range = (te_chunk_no*unm_te_count, (te_chunk_no+1)*mon_te_count)
+        te_unm_idx_range = (te_chunk_no*unm_te_count, (te_chunk_no+1)*unm_te_count)
 
         te_idx = np.arange(*te_idx_range)
-        te_unm_idx = np.arange(*te_idx_range)
+        te_unm_idx = np.arange(*te_unm_idx_range)
 
         if te_chunk_no > 0:
             tr_idx_1 = np.arange(0, te_idx_range[0])
@@ -269,7 +269,7 @@ class GenericWFDataset(data.Dataset):
                         continue
 
                 # apply processing to sample
-                x = on_load_transforms(x)
+                x = on_load_transforms(x.astype(float))
 
                 # store transforms to disk 
                 if self.tmp_data is not None:
@@ -435,6 +435,36 @@ class Surakav(GenericWFDataset):
             **kwargs
         )
 
+class Real(GenericWFDataset):
+    def __init__(self, root, *args, 
+            mon_tr_count = 1000, unm_tr_count = 50000,
+            mon_te_count = 100, unm_te_count = 50000,
+            defense_mode = 'undef',
+            **kwargs):
+
+        data_dir = join(root, 'wf-real')
+        #mon_raw_data_name = f'mon_250_100.pkl'
+        mon_raw_data_name = f'top_100_redo_small.pkl'
+        unm_raw_data_name = f'not_top_250.pkl'
+
+        mon_suffix = f''
+        unm_suffix = f''
+
+        class_divisor = 1
+
+        super().__init__(
+            data_dir,
+            mon_raw_data_name,
+            unm_raw_data_name,
+            mon_suffix, 
+            unm_suffix, 
+            mon_tr_count, unm_tr_count,
+            mon_te_count, unm_te_count,
+            *args, 
+            class_divisor = class_divisor, 
+            **kwargs
+        )
+
 
 # # # #
 #
@@ -547,7 +577,8 @@ def load_mon(data_dir, mon_raw_data_name, sample_idx,
         for multisample in samples:
             i = 0
             while i < len(multisample) and i < multisample_count:
-                sample = np.around(multisample[i], decimals=2)
+                #sample = np.around(multisample[i], decimals=2)
+                sample = np.nan_to_num(multisample[i])
                 sample = np.array([np.abs(sample), np.ones(len(sample)), np.sign(sample)]).T
                 i += 1
                 if len(sample) < min_length: continue
@@ -558,6 +589,7 @@ def load_mon(data_dir, mon_raw_data_name, sample_idx,
 
     all_X = np.array(all_X, dtype=object)
     all_y = np.array(all_y)
+
     return all_X, all_y
 
 
@@ -656,7 +688,7 @@ DATASET_CHOICES = ['be', 'be-front', 'be-interspace', 'be-regulator', 'be-ts2', 
                    'amazon', 'amazon-300k', 'amazon-front', 'amazon-front-300k', 'amazon-interspace', 'amazon-interspace-300k',
                    'webmd', 'webmd-300k', 'webmd-front', 'webmd-front-300k', 'webmd-interspace', 'webmd-interspace-300k',
                    'gong', 'gong-surakav4', 'gong-surakav6', 'gong-front', 'gong-tamaraw',
-                   'gong-50k', 'gong-surakav4-50k', 'gong-surakav6-50k', 'gong-front-50k', 'gong-tamaraw-50k', 'vcf-google'
+                   'gong-50k', 'gong-surakav4-50k', 'gong-surakav6-50k', 'gong-front-50k', 'gong-tamaraw-50k', 'vcf-google', 'real'
                    ]
 
 
@@ -823,6 +855,13 @@ def load_data(dataset,
                             defense_mode = 'surakav-0.4',
                             **kwargs,
                 )
+    elif dataset == "real":
+        data_obj = partial(Real, 
+                            root, 
+                            defense_mode = 'undef',
+                            **kwargs,
+                )
+
 
     elif dataset == "gong-surakav6":
         data_obj = partial(Surakav, 
