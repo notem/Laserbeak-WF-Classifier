@@ -437,15 +437,15 @@ class Surakav(GenericWFDataset):
 
 class Real(GenericWFDataset):
     def __init__(self, root, *args, 
-            mon_tr_count = 1000, unm_tr_count = 50000,
-            mon_te_count = 100, unm_te_count = 50000,
+            mon_tr_count = 500, unm_tr_count = 100000,
+            mon_te_count = 10, unm_te_count = 10000,
             defense_mode = 'undef',
             **kwargs):
 
         data_dir = join(root, 'wf-real')
         #mon_raw_data_name = f'mon_250_100.pkl'
         mon_raw_data_name = f'top_100_redo_small.pkl'
-        unm_raw_data_name = f'not_top_250.pkl'
+        unm_raw_data_name = f'not_top_100_redo.pkl'
 
         mon_suffix = f''
         unm_suffix = f''
@@ -619,7 +619,8 @@ def load_unm(data_dir, raw_data_name, sample_idx,
 
         j = 0
         while j < len(multisample) and j < multisample_count:
-            sample = np.around(multisample[j], decimals=2)
+            #sample = np.around(multisample[j], decimals=2)
+            sample = np.nan_to_num(multisample[j])
             sample = np.array([np.abs(sample), np.ones(len(sample)), np.sign(sample)]).T
             j += 1
             if len(sample) < min_length: continue

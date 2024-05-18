@@ -382,12 +382,14 @@ if __name__ == "__main__":
         epoch_acc = 0
         epoch_n = 0
 
-        if return_raw:  # store all prediction values
-            all_y_prob = np.array([])
-            all_y_pred = np.array([])
-            all_targets = np.array([])
+        #if return_raw:  # store all prediction values
+        #    continue
+        all_y_prob = np.array([])
+        all_y_pred = np.array([])
+        all_targets = np.array([])
 
         runtimes = []
+        thresholds = np.linspace(0.0, 1.0, num=50, endpoint=False)
 
         with tqdm(dataloader, desc=desc, 
                 bar_format='{l_bar}{bar:10}{r_bar}{bar:-10b}', 
@@ -407,10 +409,25 @@ if __name__ == "__main__":
                 soft_res = F.softmax(cls_pred, dim=1)
                 y_prob, y_pred = soft_res.max(1)
 
+                # Convert tensors to numpy arrays
+                y_prob_np = y_prob.detach().cpu().numpy()  # Ensure tensors are on CPU and detached from gradients
+                y_pred_np = y_pred.detach().cpu().numpy()
+                targets_np = targets.detach().cpu().numpy()
+
+                # Concatenate arrays
                 if return_raw:
-                    all_y_prob = np.concatenate((all_y_prob, y_prob.item()))
-                    all_y_pred = np.concatenate((all_y_pred, y_pred.item()))
-                    all_targets = np.concatenate((all_targets, targets.item()))
+                    continue
+                all_y_prob = np.concatenate((all_y_prob, y_prob_np))
+                all_y_pred = np.concatenate((all_y_pred, y_pred_np))
+                all_targets = np.concatenate((all_targets, targets_np))
+
+                '''
+                if return_raw:
+                    continue
+                all_y_prob = np.concatenate((all_y_prob, y_prob.item()))
+                all_y_pred = np.concatenate((all_y_pred, y_pred.item()))
+                all_targets = np.concatenate((all_targets, targets.item()))
+                '''
                 
                 loss = criterion(cls_pred, targets)
 
@@ -438,9 +455,11 @@ if __name__ == "__main__":
                 runtimes.append(e-s)
                 # # # # #
 
+                '''
                 if include_unm:
                     calc_ow(y_prob, y_pred, targets, 
-                            thresholds = thresholds, res = res)
+                            thresholds = thresholds)
+                '''
 
                 pbar.set_postfix({
                                   'acc': epoch_acc/epoch_n,
@@ -450,6 +469,9 @@ if __name__ == "__main__":
 
         epoch_loss /= batch_idx + 1
         epoch_acc /= epoch_n
+        if include_unm:
+            calc_ow(all_y_prob, all_y_pred, all_targets, 
+                    thresholds = thresholds)
 
         if return_raw:
             return epoch_loss, epoch_acc, np.stack((all_y_prob, all_y_pred, targets))
