@@ -1,0 +1,24 @@
+{
+    "input_size": 7000,
+    "filter_grow_factor": 2,
+    "channel_up_factor": 5.34,
+    "depth_wise": false,
+    "trans_depths": 2,
+    "mhsa_kwargs": {
+        "head_dim": 10,
+        "use_conv_proj": true,
+        "kernel_size": 7,
+        "stride": 4,
+        "feedforward_style": "mlp",
+        "feedforward_ratio": 3,
+        "feedforward_drop": 0.0
+    },
+    "feature_list": [
+        "time_dirs",
+        "times_norm",
+        "cumul_norm",
+        "iat_dirs",
+        "inv_iat_log_dirs",
+        "running_rates"
+    ]
+}

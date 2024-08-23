@@ -1,5 +1,6 @@
 {
     "input_size": 7000,
+    "conv_skip": true,
     "feature_list": [
         "time_dirs"
     ]

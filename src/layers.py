@@ -1,7 +1,136 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import numpy as np
 from timm.layers import to_2tuple
+from functools import partial
+
+
+class MHSAttention(nn.Module):
+    """
+    Vanilla self-attention from Transformer: https://arxiv.org/abs/1706.03762.
+    Modified from timm.
+    Added support for conv. projections (from CvT) and uses PyTorch 2.0 accelerated attention function
+    """
+    def __init__(self, dim, 
+                 head_dim = None, num_heads = None, 
+                 use_conv_proj = False,
+                 attn_drop = 0., proj_drop = 0., head_drop = 0.,
+                 bias = True,
+                 **kwargs,
+                 ):
+        super().__init__()
+
+        assert head_dim is not None or num_heads is not None
+
+        if head_dim is not None:
+            self.head_dim = head_dim
+            self.num_heads = num_heads if num_heads else dim // head_dim
+        else:
+            self.head_dim = dim // num_heads
+            self.num_heads = num_heads
+        
+        self.scale = self.head_dim ** -0.5
+        if self.num_heads == 0:
+            self.num_heads = 1
+
+        self.attention_dim = self.num_heads * self.head_dim
+
+        self.q_linear_proj = nn.Linear(dim, self.attention_dim, bias = bias)
+        self.k_linear_proj = nn.Linear(dim, self.attention_dim, bias = bias)
+        self.v_linear_proj = nn.Linear(dim, self.attention_dim, bias = bias)
+
+        # CvT MHSA - https://github.com/microsoft/CvT/blob/f851e681966390779b71380d2600b52360ff4fe1/lib/models/cls_cvt.py#L77
+        # replaces linear projections with depth-wise convolutions
+        # conv. strides > 1 can be used to reduce MHSA computations
+        self.use_conv_proj = use_conv_proj
+        if use_conv_proj:
+            kernel_size = kwargs.get('kernel_size', 3)
+            stride = kwargs.get('stride', 1)
+            dwconv = partial(nn.Conv1d,
+                             groups = dim,
+                             kernel_size = kernel_size,
+                             padding = kernel_size // 2,
+                             bias = bias)
+            self.q_conv_proj = dwconv(dim, dim)
+            self.k_conv_proj = dwconv(dim, dim, stride = stride)
+            self.v_conv_proj = dwconv(dim, dim, stride = stride)
+
+        self.attn_drop = nn.Dropout(attn_drop)
+        self.attn_drop_p = attn_drop
+
+        self.proj = nn.Linear(self.attention_dim, dim)
+        self.proj_drop = nn.Dropout(proj_drop)
+
+        self.head_drop = nn.Dropout2d(head_drop)
+
+
+    def qkv(self, x, skip_toks=0):
+        """Compute query, key, value projects of X
+           - don't apply conv. projection to any skipped tokens (e.g., sink tokens)
+        """
+        if not self.use_conv_proj:
+            q = self.q_linear_proj(x)
+            q = q.view(x.shape[0], -1, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
+            k = self.k_linear_proj(x)
+            k = k.view(x.shape[0], -1, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
+            v = self.v_linear_proj(x)
+            v = v.view(x.shape[0], -1, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
+
+        else:
+            x = x.transpose(1,2)  # transpose for conv. projections
+
+            # don't apply convolutional projection to sink tokens
+            if skip_toks > 0:
+                t, x = x[...,:skip_toks].transpose(1,2), x[...,skip_toks:]
+
+            # apply conv + linear projection to sequence toks
+            q = self.q_linear_proj(self.q_conv_proj(x).transpose(1,2))
+            q = q.view(x.shape[0], -1, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
+            k = self.k_linear_proj(self.k_conv_proj(x).transpose(1,2))
+            k = k.view(x.shape[0], -1, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
+            v = self.v_linear_proj(self.v_conv_proj(x).transpose(1,2))
+            v = v.view(x.shape[0], -1, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
+
+            # apply linear projections to sinks
+            if skip_toks > 0:
+                q = torch.cat((self.q_linear_proj(t).view(x.shape[0], -1, self.num_heads, self.head_dim).permute(0, 2, 1, 3), q), dim=2)
+                k = torch.cat((self.k_linear_proj(t).view(x.shape[0], -1, self.num_heads, self.head_dim).permute(0, 2, 1, 3), k), dim=2)
+                v = torch.cat((self.v_linear_proj(t).view(x.shape[0], -1, self.num_heads, self.head_dim).permute(0, 2, 1, 3), v), dim=2)
+
+        return q,k,v
+        
+    def forward(self, x, 
+                attn_mask = None, 
+                skip_toks = 0):
+
+        B, N, C = x.shape
+        q, k, v = self.qkv(x, skip_toks)
+
+        if attn_mask is not None:
+            #if attn_mask.dtype is torch.bool:
+            #    attn_mask = attn_mask.masked_fill(~attn_mask, -float('inf'))
+            attn_mask = attn_mask[:,:,:,None].repeat(1, q.shape[1], 1, k.shape[2])
+            #attn_mask = attn_mask[:,:,:,None].repeat(1, 1, 1, k.shape[2])
+
+        #"""Old, manual ops to produce self-attention
+        #attn = (q @ k.transpose(-2, -1)) * self.scale
+        #attn = attn.softmax(dim=-1)
+        #attn = self.attn_drop(attn)
+        #x = (attn @ v)
+        #"""
+        x = F.scaled_dot_product_attention(q, k, v, 
+                                    attn_mask = attn_mask, 
+                                    dropout_p = self.attn_drop_p, 
+                                    is_causal = False)
+        
+
+        self.head_drop(x)
+        x = x.transpose(1, 2).reshape(B, N, self.attention_dim)
+
+        x = self.proj(x)
+        x = self.proj_drop(x)
+        return x
 
 
 class Scale(nn.Module):
@@ -10,10 +139,12 @@ class Scale(nn.Module):
     """
     def __init__(self, dim, init_value=1.0, trainable=True):
         super().__init__()
-        self.scale = nn.Parameter(init_value * torch.ones(dim), requires_grad=trainable)
+        #self.scale = nn.Parameter(init_value * torch.ones(dim), requires_grad=trainable)
+        self.conv = nn.Conv1d(dim, dim, kernel_size=1)
 
     def forward(self, x):
-        return x * self.scale
+        #return x * self.scale
+        return self.conv(x)
 
 
 class LayerNormGeneral(nn.Module):

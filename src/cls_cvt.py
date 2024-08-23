@@ -518,7 +518,7 @@ class VisionTransformer(nn.Module):
         return x, cls_tokens
 
 class ConvolutionalVisionTransformer(nn.Module):
-    def __init__(self,
+    def __init__(self,input_size,
                  in_chans=6,
                  num_classes=101,
                  act_layer=nn.GELU,
@@ -527,6 +527,7 @@ class ConvolutionalVisionTransformer(nn.Module):
                  spec=None):
         super().__init__()
         self.num_classes = num_classes
+        self.input_size = input_size
 
         self.num_stages = 3
 
@@ -669,6 +670,13 @@ class ConvolutionalVisionTransformer(nn.Module):
         return x
 
     def forward(self, x):
+        # clip sample length to maximum supported size and pad with zeros if necessary
+        size_dif = x.shape[-1] - self.input_size
+        if x.shape[-1] > self.input_size:
+            x = x[..., :self.input_size]
+        elif size_dif < 0:
+            x = F.pad(x, (0,abs(size_dif)))
+
         x = self.forward_features(x)
         x = self.out(self.fc2(self.fc1(x)))
 

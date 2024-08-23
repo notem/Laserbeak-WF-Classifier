@@ -151,6 +151,123 @@ class VCFDataset(data.Dataset):
                 print(f">>> Failed to clear temp directory \'{self.tmp_dir}\'!!")
 
 
+class TimeBasedDataset(data.Dataset):
+    """
+    Flexible Dataset object that can be applied to load any of the subpage-based WF datasets
+    """
+    def __init__(self, root, 
+                mon_raw_data_name,
+                unm_raw_data_name,
+                mon_count, unm_count, 
+                *args, 
+                train = True,
+                mode = 'slow', 
+                cutoff_perc = 90,
+                class_selector = None,
+                class_divisor = 1,
+                multisample_count = 1,
+                min_length = MIN_LENGTH_DEFAULT, 
+                max_length = MAX_LENGTH_DEFAULT, 
+                per_batch_transforms = None, 
+                on_load_transforms = None,
+                tmp_directory = './tmp',
+                tmp_subdir = None,
+                keep_tmp = False,
+                **kwargs,
+            ):
+        
+        idx = np.arange(mon_count)
+        unm_idx = np.arange(unm_count)
+        
+        if mode == 'slow': # train on slow, test on fast
+            time_filter = (0, cutoff_perc) if train else (cutoff_perc, 100)
+        elif mode == 'fast': # train on fast, test on slow
+            time_filter = (100-cutoff_perc, 100) if train else (0, 100-cutoff_perc)
+        
+        dataset, labels, ids, classes = load_full_dataset(root,
+                mon_raw_data_name = mon_raw_data_name,
+                unm_raw_data_name = unm_raw_data_name,
+                mon_sample_idx = idx, 
+                unm_sample_idx = unm_idx,
+                multisample_count = multisample_count,
+                min_length = min_length, 
+                class_divisor = class_divisor,
+                class_selector = class_selector,
+                time_filter = time_filter,
+                **kwargs)
+
+        self.classes = classes
+        self.ids = ids
+        self.dataset = dataset
+        self.labels = labels
+        self.transform = per_batch_transforms
+        self.max_length = max_length
+        self.keep_tmp = False
+
+        # pre-apply transformations 
+        self.tmp_data = None
+        if on_load_transforms:
+            # setup tmp directory and filename map
+            if tmp_directory is not None:
+                if tmp_subdir is not None:
+                    self.tmp_dir = os.path.join(tmp_directory, tmp_subdir, f'{mode}_{cutoff_perc}')
+                else:
+                    self.tmp_dir = f'{tmp_directory}/tmp{random.randint(0, 1000)}'
+                if not os.path.exists(self.tmp_dir):
+                    try:
+                        os.makedirs(self.tmp_dir)
+                    except:
+                        pass
+                self.keep_tmp = keep_tmp
+                self.tmp_data = dict()
+
+            # do processing
+            for ID in tqdm(self.ids, desc="Processing...", dynamic_ncols=True):
+                x = self.dataset[ID]  # get sample by ID
+
+                # check if processed sample already exists in tmp
+                if self.tmp_data is not None:
+                    filename = f'{self.tmp_dir}/{ID}.pt'
+                    self.tmp_data[ID] = filename
+                    if os.path.exists(filename):
+                        del x
+                        continue
+
+                # apply processing to sample
+                x = on_load_transforms(x)
+
+                # store transforms to disk 
+                if self.tmp_data is not None:
+                    torch.save(x, filename)
+                    del x
+                # store in memory
+                else:
+                    self.dataset[ID] = x
+
+            if self.tmp_data is not None:
+                del self.dataset
+                self.dataset = dict()
+ 
+    def __len__(self):
+        return len(self.ids)
+ 
+    def __getitem__(self, index):
+        ID = self.ids[index]
+        X = self.dataset[ID] if self.tmp_data is None else torch.load(self.tmp_data[ID])
+        if self.max_length:
+            X = X[:self.max_length]
+        if self.transform:
+            return self.transform(X), self.labels[ID]
+        return X, self.labels[ID]
+
+    def __del__(self):
+        if not self.keep_tmp:
+            try:
+                if self.tmp_data is not None:
+                    shutil.rmtree(self.tmp_dir)
+            except:
+                print(f">>> Failed to clear temp directory \'{self.tmp_dir}\'!!")
+
 
 class GenericWFDataset(data.Dataset):
     """
@@ -159,8 +276,6 @@ class GenericWFDataset(data.Dataset):
     def __init__(self, root, 
                 mon_raw_data_name,
                 unm_raw_data_name,
-                mon_suffix,
-                unm_suffix,
                 mon_tr_count, unm_tr_count, 
                 mon_te_count, unm_te_count, 
                 *args, 
@@ -201,15 +316,10 @@ class GenericWFDataset(data.Dataset):
             unm_start_idx = unm_te_count + unm_tr_count
             tr_unm_idx = np.arange(unm_start_idx, unm_start_idx + unm_tr_count)
 
-        mon_suffix_t = f'{mon_te_count}-{mon_tr_count}'
-        unm_suffix_t = f'{unm_te_count//1000}k-{unm_tr_count//1000}k'
-
         if train:
             dataset, labels, ids, classes = load_full_dataset(root,
                     mon_raw_data_name = mon_raw_data_name,
                     unm_raw_data_name = unm_raw_data_name,
-                    mon_suffix = f'tr-{mon_suffix_t}{mon_suffix}',
-                    unm_suffix = f'tr-{unm_suffix_t}{unm_suffix}',
                     mon_sample_idx = tr_idx, 
                     unm_sample_idx = tr_unm_idx,
                     multisample_count = multisample_count,
@@ -221,8 +331,6 @@ class GenericWFDataset(data.Dataset):
             dataset, labels, ids, classes = load_full_dataset(root,
                     mon_raw_data_name = mon_raw_data_name,
                     unm_raw_data_name = unm_raw_data_name,
-                    mon_suffix = f'te-{mon_suffix_t}{mon_suffix}',
-                    unm_suffix = f'te-{unm_suffix_t}{unm_suffix}',
                     mon_sample_idx = te_idx, 
                     unm_sample_idx = te_unm_idx,
                     multisample_count = 1,
@@ -321,17 +429,12 @@ class AmazonSingleSite(GenericWFDataset):
         mon_raw_data_name = f'{defense_mode}-amazon.pkl'
         unm_raw_data_name = f'{defense_mode}-unm.pkl'
 
-        mon_suffix = f''
-        unm_suffix = f''
-
         class_divisor = 1 if subpage_as_labels else 490
 
         super().__init__(
             data_dir,
             mon_raw_data_name,
             unm_raw_data_name,
-            mon_suffix, 
-            unm_suffix, 
             mon_tr_count, unm_tr_count,
             mon_te_count, unm_te_count,
             *args, 
@@ -351,17 +454,12 @@ class WebMDSingleSite(GenericWFDataset):
         mon_raw_data_name = f'{defense_mode}-webmd.pkl'
         unm_raw_data_name = f'{defense_mode}-unm.pkl'
 
-        mon_suffix = f''
-        unm_suffix = f''
-
         class_divisor = 1 if subpage_as_labels else 495
 
         super().__init__(
             data_dir,
             mon_raw_data_name,
             unm_raw_data_name,
-            mon_suffix, 
-            unm_suffix, 
             mon_tr_count, unm_tr_count,
             mon_te_count, unm_te_count,
             *args, 
@@ -376,6 +474,33 @@ class WebMDSingleSite(GenericWFDataset):
 #
 # # # #
 
+class BigEnoughTime(TimeBasedDataset):
+    def __init__(self, root, *args, 
+            mon_count = 20, unm_count = 1900,
+            subpage_as_labels = False,
+            defense_mode = 'undef',
+            mode = 'slow',
+            median_load_times = {},
+            **kwargs):
+
+        data_dir = join(root, 'wf-bigenough')
+        mon_raw_data_name = f'{defense_mode}-mon.pkl'
+        unm_raw_data_name = f'{defense_mode}-unm.pkl'
+
+        class_divisor = 1 if subpage_as_labels else 10
+
+        super().__init__(
+            data_dir,
+            mon_raw_data_name,
+            unm_raw_data_name,
+            mon_count, unm_count,
+            *args, 
+            class_divisor = class_divisor, 
+            mode = mode,
+            median_load_times = median_load_times,
+            **kwargs
+        )
+
 class BigEnough(GenericWFDataset):
     def __init__(self, root, *args, 
             mon_tr_count = 18, unm_tr_count = 17100,
@@ -388,17 +513,12 @@ class BigEnough(GenericWFDataset):
         mon_raw_data_name = f'{defense_mode}-mon.pkl'
         unm_raw_data_name = f'{defense_mode}-unm.pkl'
 
-        mon_suffix = f''
-        unm_suffix = f''
-
         class_divisor = 1 if subpage_as_labels else 10
 
         super().__init__(
             data_dir,
             mon_raw_data_name,
             unm_raw_data_name,
-            mon_suffix, 
-            unm_suffix, 
             mon_tr_count, unm_tr_count,
             mon_te_count, unm_te_count,
             *args, 
@@ -417,17 +537,12 @@ class Surakav(GenericWFDataset):
         mon_raw_data_name = f'{defense_mode}-mon.pkl'
         unm_raw_data_name = f'{defense_mode}-unm.pkl'
 
-        mon_suffix = f''
-        unm_suffix = f''
-
         class_divisor = 1
 
         super().__init__(
             data_dir,
             mon_raw_data_name,
             unm_raw_data_name,
-            mon_suffix, 
-            unm_suffix, 
             mon_tr_count, unm_tr_count,
             mon_te_count, unm_te_count,
             *args, 
@@ -450,12 +565,11 @@ def load_full_dataset(
         unm_sample_idx = list(range(9000)),
         mon_raw_data_name = 'mon_standard.pkl',
         unm_raw_data_name = 'unm_standard.pkl',
-        mon_suffix = "",
-        unm_suffix = "",
         multisample_count = 1,
         min_length = MIN_LENGTH_DEFAULT,
         class_divisor = 1,
         class_selector = None,
+        time_filter = None,
         **kwargs
     ):
     data, labels = dict(), dict()
@@ -470,8 +584,8 @@ def load_full_dataset(
     if include_mon:
         all_X, all_y = load_mon(data_dir, mon_raw_data_name, mon_sample_idx, 
                                 min_length = min_length, 
-                                mon_suffix = mon_suffix,
                                 multisample_count = multisample_count,
+                                time_filter = time_filter,
                             )
 
         all_y //= class_divisor
@@ -489,8 +603,8 @@ def load_full_dataset(
         all_X_unm = load_unm(data_dir, unm_raw_data_name, unm_sample_idx, 
                                 unm_label = unm_label,
                                 min_length = min_length, 
-                                unm_suffix = unm_suffix,
                                 multisample_count = multisample_count,
+                                time_filter = time_filter,
                             )
         all_y_unm = np.ones(len(all_X_unm)) * unm_label
         if (all_X is not None):
@@ -518,17 +632,13 @@ def load_full_dataset(
 
 def load_mon(data_dir, mon_raw_data_name, sample_idx,
              min_length = MIN_LENGTH_DEFAULT,
-             mon_suffix = "",
              multisample_count = 1,
+             time_filter = None,
             ):
     """
     Load monitored samples from pickle file
     """
     MON_PATH = join(data_dir, mon_raw_data_name)
-
-    data = {}
-    labels = {}
-    IDs = []
 
     print(f"Loading mon data from {MON_PATH}...")
     with open(MON_PATH, 'rb') as fi:
@@ -544,15 +654,47 @@ def load_mon(data_dir, mon_raw_data_name, sample_idx,
         samples = np.array(raw_data[key], dtype=object)[sample_idx].tolist()
         #samples = raw_data[key]
 
+        cls_X = []
+        cls_y = []
         for multisample in samples:
             i = 0
+            sample_X = []
+            sample_y = []
             while i < len(multisample) and i < multisample_count:
                 sample = np.around(multisample[i], decimals=2)
+                #sample = multisample[i]
                 sample = np.array([np.abs(sample), np.ones(len(sample)), np.sign(sample)]).T
                 i += 1
                 if len(sample) < min_length: continue
-                all_X.append(sample)
-                all_y.append(key)
+                sample_X.append(sample)
+                sample_y.append(key)
+            
+            cls_X.append(sample_X)
+            cls_y.append(sample_y)
+
+        # filter by sample load time
+        if time_filter is not None:
+            load_times = [[sample.T[0][-1] for sample in samples] for samples in cls_X]
+            load_times = [min(t) for t in load_times]
+            cutoffs = (np.percentile(load_times, time_filter[0]), np.percentile(load_times, time_filter[1]))
+            for i in range(len(load_times)):
+                if time_filter[0] == 0:
+                    if load_times[i] >= cutoffs[0] and load_times[i] < cutoffs[1]:
+                        all_X.extend(cls_X[i])
+                        all_y.extend(cls_y[i])
+                elif time_filter[1] == 100:
+                    if load_times[i] > cutoffs[0] and load_times[i] <= cutoffs[1]:
+                        all_X.extend(cls_X[i])
+                        all_y.extend(cls_y[i])
+                else:
+                    if load_times[i] > cutoffs[0] and load_times[i] <= cutoffs[1]:
+                        all_X.extend(cls_X[i])
+                        all_y.extend(cls_y[i])
+        else:
+            for i in range(cls_X):
+                all_X.extend(cls_X[i])
+                all_y.extend(cls_y[i])
+
 
     del raw_data
 
@@ -564,9 +706,8 @@ def load_mon(data_dir, mon_raw_data_name, sample_idx,
 def load_unm(data_dir, raw_data_name, sample_idx,
              min_length = MIN_LENGTH_DEFAULT, 
              max_samples = 0, 
-             unm_label = 1,
-             unm_suffix = "",
              multisample_count = 1,
+             time_filter = None,
             ):
     """
     Load unmonitored samples from pickle file
@@ -580,21 +721,39 @@ def load_unm(data_dir, raw_data_name, sample_idx,
     sample_idx = sample_idx[sample_idx < len(raw_data)]
     samples = np.array(raw_data, dtype=object)[sample_idx].tolist()
 
-    all_X_umn = []
+    X_umn = []
     for i,multisample in enumerate(samples):
         if max_samples > 0 and len(all_X_umn) == max_samples:
             break
+        
+        sample_X = []
 
         j = 0
         while j < len(multisample) and j < multisample_count:
             sample = np.around(multisample[j], decimals=2)
+            #sample = multisample[i]
             sample = np.array([np.abs(sample), np.ones(len(sample)), np.sign(sample)]).T
             j += 1
             if len(sample) < min_length: continue
-            all_X_umn.append(sample)
+            sample_X.append(sample)
 
-            if max_samples > 0 and len(all_X_umn) == max_samples:
+            if max_samples > 0 and (len(X_umn)*multisample_count)+len(sample_X) == max_samples:
                 break
+            
+        X_umn.append(sample_X)
+
+    all_X_umn = []
+    if time_filter is not None:
+        load_times = [[sample.T[0][-1] for sample in samples] for samples in X_umn]
+        load_times = [min(t) for t in load_times]
+        cutoffs = (np.percentile(load_times, time_filter[0]), np.percentile(load_times, time_filter[1]))
+        for i in range(len(load_times)):
+            if load_times[i] > cutoffs[0] and load_times[i] < cutoffs[1]:
+                all_X_umn.extend(X_umn[i])
+    else:
+        for i in range(len(X_umn)):
+            all_X_umn.extend(X_umn[i])
+
 
     del raw_data
 
@@ -658,6 +817,10 @@ DATASET_CHOICES = ['be', 'be-front', 'be-interspace', 'be-regulator', 'be-ts2', 
                    'gong', 'gong-surakav4', 'gong-surakav6', 'gong-front', 'gong-tamaraw',
                    'gong-50k', 'gong-surakav4-50k', 'gong-surakav6-50k', 'gong-front-50k', 'gong-tamaraw-50k', 'vcf-google'
                    ]
+DATASET_CHOICES += ['be-slow', 'be-fast', 
+                    'be-front-slow', 'be-front-fast', 
+                    'be-interspace-fast', 'be-interspace-slow', 
+                    'be-regulator-fast', 'be-regulator-slow']
 
 
 def load_data(dataset, 
@@ -698,7 +861,7 @@ def load_data(dataset,
                             defense_mode = 'interspace',
                             **kwargs,
                 )
-
+        
     elif dataset == 'be-regulator':
         data_obj = partial(BigEnough, 
                             root, 
@@ -887,6 +1050,68 @@ def load_data(dataset,
 
     elif dataset == "vcf-google":
         data_obj = partial(VCFDataset, root)
+        
+    elif dataset == 'be-slow':
+        data_obj = partial(BigEnoughTime, 
+                            root, 
+                            mode = 'slow',
+                            **kwargs,
+                )
+
+    elif dataset == 'be-front-slow':
+        data_obj = partial(BigEnoughTime, 
+                            root, 
+                            mode = 'slow',
+                            defense_mode = 'front',
+                            **kwargs,
+                )
+
+    elif dataset == 'be-interspace-slow':
+        data_obj = partial(BigEnoughTime, 
+                            root, 
+                            mode = 'slow',
+                            defense_mode = 'interspace',
+                            **kwargs,
+                )
+        
+    elif dataset == 'be-regulator-slow':
+        data_obj = partial(BigEnoughTime, 
+                            root, 
+                            mode = 'slow',
+                            defense_mode = 'regulator',
+                            **kwargs,
+                )
+        
+    elif dataset == 'be-fast':
+        data_obj = partial(BigEnoughTime, 
+                            root, 
+                            mode = 'fast',
+                            **kwargs,
+                )
+
+    elif dataset == 'be-front-fast':
+        data_obj = partial(BigEnoughTime, 
+                            root, 
+                            mode = 'fast',
+                            defense_mode = 'front',
+                            **kwargs,
+                )
+
+    elif dataset == 'be-interspace-fast':
+        data_obj = partial(BigEnoughTime, 
+                            root, 
+                            mode = 'fast',
+                            defense_mode = 'interspace',
+                            **kwargs,
+                )
+        
+    elif dataset == 'be-regulator-fast':
+        data_obj = partial(BigEnoughTime, 
+                            root, 
+                            mode = 'fast',
+                            defense_mode = 'regulator',
+                            **kwargs,
+                )
 
 
     trainset = data_obj(train=True, **tr_transforms) 
