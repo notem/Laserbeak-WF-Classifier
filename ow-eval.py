@@ -149,7 +149,7 @@ if __name__ == "__main__":
     te_augments = [
                     ]
 
-    trainloader, testloader, classes = load_data(dataset, 
+    trainloader, valloader, testloader, classes = load_data(dataset, 
                                                  batch_size = mini_batch_size,
                                                  tr_transforms = tr_transforms,
                                                  te_transforms = te_transforms,
