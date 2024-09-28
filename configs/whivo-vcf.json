@@ -1,21 +1,22 @@
 {
     "input_size": 3000,
     "filter_grow_factor": 1.5,
-    "channel_up_factor": 14,
+    "channel_up_factor": 12,
     "conv_expand_factor": 3,
-    "conv_dropout_p": 0.0,
+    "conv_dropout_p": 0,
     "conv_skip": true,
     "depth_wise": true,
     "use_gelu": true,
     "stem_downproj": 0.5,
     "stage_count": 4,
-    "kernel_size": 7,
-    "pool_stride_size": 4,
-    "pool_size": 7,
+    "kernel_size": 5,
+    "pool_stride_size": 3,
+    "pool_size": 5,
     "block_dropout_p": 0.1,
-    "mlp_hidden_dim": 512,
-    "trans_depths": 2,
-    "sink_tokens": 6,
+    "flatten_feats": false,
+    "mlp_hidden_dim": [256],
+    "mlp_dropout_p": [0.5],
+    "trans_depths": 1,
     "mhsa_kwargs": {
         "head_dim": 10,
         "use_conv_proj": true,
@@ -26,12 +27,12 @@
         "feedforward_drop": 0.0
     },
     "feature_list": [
-	"size_dirs",
+	    "size_dirs",
         "time_dirs",
         "times_norm",
-	"cumul_norm",
+	    "cumul_norm",
         "iat_dirs",
         "inv_iat_log_dirs",
-	"running_rates"
+	    "running_rates"
     ]
 }
