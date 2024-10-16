@@ -26,8 +26,11 @@ class VCFDataset(data.Dataset):
     """
     def __init__(self, root, 
                 *args, 
-                mon_tr_count = 130,
-                mon_te_count = 20,
+                dir_name = 'whivo-google',
+                tr_file_names = ['all.pkl'],
+                te_file_names = ['all.pkl'],
+                mon_tr_count = 135,
+                mon_te_count = 15,
                 train = True, 
                 per_batch_transforms = None, 
                 on_load_transforms = None,
@@ -37,13 +40,19 @@ class VCFDataset(data.Dataset):
                 **kwargs,
             ):
 
+        np.random.seed(0)
+        idx = np.arange(mon_te_count + mon_tr_count)
+        np.random.shuffle(idx)
+
         te_idx = np.arange(mon_te_count)
+        te_idx = idx[te_idx]
         tr_idx = np.arange(mon_te_count, mon_te_count + mon_tr_count)
+        tr_idx = idx[tr_idx]
 
         mon_suffix_t = f'{mon_te_count}-{mon_tr_count}'
 
-        def prep(set_idx):
-            with open(os.path.join(root, 'vcf-google', 'data150.pkl'), 'rb') as fi:
+        def prep(set_idx, file_name):
+            with open(os.path.join(root, dir_name, file_name), 'rb') as fi:
                 raw_data = pickle.load(fi)
             keys = sorted(list(raw_data.keys()))
 
@@ -57,21 +66,17 @@ class VCFDataset(data.Dataset):
                     classes.append(classes[-1]+1)
                 else:
                     classes.append(0)
-                samples = raw_data[key][set_idx]
-                for j,x in enumerate(samples): 
 
-                    ID = f'{i}-{j}'
-                    ids.append(ID)
-
-                    # remove padding from sample
-                    z = np.where(x.T[0] == 0.)[0]
-                    if z.size > 0:
-                        x = x[:z[0]]
+                for j in set_idx:
+                    x = raw_data[key][j]
 
                     sizes = x.T[0]
-                    times = np.cumsum(x.T[1])
+                    times = x.T[1]
                     dirs = x.T[2]
-                    x = np.array([times, sizes, dirs]).T
+                    x = np.stack((times,sizes,dirs),axis=-1)
+
+                    ID = f'{i}-{j}-{file_name}'
+                    ids.append(ID)
 
                     dataset[ID] = x
                     labels[ID] = classes[-1]
@@ -80,10 +85,23 @@ class VCFDataset(data.Dataset):
 
 
         if train:
-            dataset, labels, ids, classes = prep(tr_idx)
+            dataset, labels, ids, classes = dict(), dict(), [], set()
+            for file_name in tr_file_names:
+                dataset_t, labels_t, ids_t, classes_t = prep(tr_idx, file_name)
+                dataset.update(dataset_t)
+                labels.update(labels_t)
+                ids.extend(ids_t)
+                classes.update(classes_t)
 
         else:
-            dataset, labels, ids, classes = prep(te_idx)
+            dataset, labels, ids, classes = dict(), dict(), [], set()
+            for file_name in te_file_names:
+                dataset_t, labels_t, ids_t, classes_t = prep(te_idx, file_name)
+                dataset.update(dataset_t)
+                labels.update(labels_t)
+                ids.extend(ids_t)
+                classes.update(classes_t)
+
 
         self.classes = classes
         self.ids = ids
@@ -815,12 +833,16 @@ DATASET_CHOICES = ['be', 'be-front', 'be-interspace', 'be-regulator', 'be-ts2', 
                    'amazon', 'amazon-300k', 'amazon-front', 'amazon-front-300k', 'amazon-interspace', 'amazon-interspace-300k',
                    'webmd', 'webmd-300k', 'webmd-front', 'webmd-front-300k', 'webmd-interspace', 'webmd-interspace-300k',
                    'gong', 'gong-surakav4', 'gong-surakav6', 'gong-front', 'gong-tamaraw',
-                   'gong-50k', 'gong-surakav4-50k', 'gong-surakav6-50k', 'gong-front-50k', 'gong-tamaraw-50k', 'vcf-google'
+                   'gong-50k', 'gong-surakav4-50k', 'gong-surakav6-50k', 'gong-front-50k', 'gong-tamaraw-50k', 
                    ]
 DATASET_CHOICES += ['be-slow', 'be-fast', 
                     'be-front-slow', 'be-front-fast', 
                     'be-interspace-fast', 'be-interspace-slow', 
                     'be-regulator-fast', 'be-regulator-slow']
+DATASET_CHOICES += ['whivo-google', 'whivo-alexa', 'whivo-alexa-global', 
+                    'whivo-alexa-india', 'whivo-alexa-usa', 'whivo-alexa-uk', 
+                    'whivo-alexa-canada', 'whivo-alexa-germany',
+                   ]
 
 
 def load_data(dataset, 
@@ -1048,8 +1070,78 @@ def load_data(dataset,
                             **kwargs,
                 )
 
-    elif dataset == "vcf-google":
-        data_obj = partial(VCFDataset, root)
+    elif dataset == "whivo-google":
+        data_obj = partial(VCFDataset, root, 
+                            dir_name = 'whivo-google', 
+                            tr_file_names = ['all.pkl'],
+                            te_file_names = ['all.pkl'],
+                            mon_tr_count = 135,
+                            mon_te_count = 15,
+                            )
+
+    elif dataset == "whivo-alexa":
+        data_obj = partial(VCFDataset, root, 
+                            dir_name = 'whivo-alexa', 
+                            tr_file_names = ['all.pkl'],
+                            te_file_names = ['all.pkl'],
+                            mon_tr_count = 270,
+                            mon_te_count = 30,
+                            )
+
+    elif dataset == "whivo-alexa-global":
+        data_obj = partial(VCFDataset, root, 
+                            dir_name = 'whivo-alexa', 
+                            tr_file_names = ['usa.pkl', 'germany.pkl', 'india.pkl', 'uk.pkl', 'canada.pkl'],
+                            te_file_names = ['usa.pkl', 'germany.pkl', 'india.pkl', 'uk.pkl', 'canada.pkl'],
+                            mon_tr_count = 216,
+                            mon_te_count = 24,
+                            )
+        
+    elif dataset == "whivo-alexa-usa":
+        data_obj = partial(VCFDataset, root, 
+                            dir_name = 'whivo-alexa', 
+                            tr_file_names = ['usa.pkl'],
+                            te_file_names = ['usa.pkl'],
+                            mon_tr_count = 216,
+                            mon_te_count = 24,
+                            )
+        
+    elif dataset == "whivo-alexa-germany":
+        data_obj = partial(VCFDataset, root, 
+                            dir_name = 'whivo-alexa', 
+                            tr_file_names = ['germany.pkl'],
+                            te_file_names = ['germany.pkl'],
+                            mon_tr_count = 216,
+                            mon_te_count = 24,
+                            )
+        
+    elif dataset == "whivo-alexa-india":
+        data_obj = partial(VCFDataset, root, 
+                            dir_name = 'whivo-alexa', 
+                            tr_file_names = ['india.pkl'],
+                            te_file_names = ['india.pkl'],
+                            mon_tr_count = 216,
+                            mon_te_count = 24,
+                            )
+        
+        
+    elif dataset == "whivo-alexa-uk":
+        data_obj = partial(VCFDataset, root, 
+                            dir_name = 'whivo-alexa', 
+                            tr_file_names = ['uk.pkl'],
+                            te_file_names = ['uk.pkl'],
+                            mon_tr_count = 216,
+                            mon_te_count = 24,
+                            )
+        
+    elif dataset == "whivo-alexa-canada":
+        data_obj = partial(VCFDataset, root, 
+                            dir_name = 'whivo-alexa', 
+                            tr_file_names = ['canada.pkl'],
+                            te_file_names = ['canada.pkl'],
+                            mon_tr_count = 216,
+                            mon_te_count = 24,
+                            )
         
     elif dataset == 'be-slow':
         data_obj = partial(BigEnoughTime, 

@@ -547,6 +547,11 @@ if __name__ == "__main__":
 
 
             if testloader is not None:
+                if save_best_epoch:
+                    checkpoint_path_epoch = f"{checkpoint_dir}/{checkpoint_fname}/best.pth"
+                    net_state_dict = torch.load(checkpoint_path_epoch)['model']
+                    net.load_state_dict(net_state_dict)
+
                 net.eval()
                 with torch.no_grad():
                     test_loss, test_acc = epoch_iter(testloader, 
